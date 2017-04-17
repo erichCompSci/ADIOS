@@ -793,7 +793,8 @@ set_format(struct adios_group_struct *t,
 	char *fullname = append_path_name(adios_var->path, adios_var->name);
 	char *mangle_name = flexpath_mangle(fullname);
 
-	for (int i = 0; i < fieldNo; i++) {
+	int i;
+	for (i = 0; i < fieldNo; i++) {
 	    if (strcmp(mangle_name, field_list[i].field_name) == 0) {
 		adios_error(err_invalid_group, "set_format:  The Flexpath transport does not allow multiple writes using the same name in a single group, variable %s is disallowed\n", fullname);
 		return NULL;
@@ -1870,7 +1871,8 @@ exchange_dimension_data(struct adios_file_struct *fd, evgroup *gp, FlexpathWrite
             }
 
             // extract dimensions for rank i from comm block
-            for (int i = 0; i < commsize; i++) {
+            int i;
+            for (i = 0; i < commsize; i++) {
                 memcpy(&all_local_dims[i*ndims], &comm_block[i*send_count + block_index], ndims * sizeof(send_block[0]));
                 memcpy(&all_offsets[i*ndims], &comm_block[i*send_count + block_index + ndims], ndims * sizeof(send_block[0]));
             }
