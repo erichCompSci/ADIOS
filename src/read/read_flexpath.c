@@ -53,6 +53,7 @@
 
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
+#define IS_BLOCKING_ON(fp) (fp->flexpath_flags & NON_BLOCKING_ON)
 
 //This is a linked list for the linked list of fp_vars
 //This is necessary to support push based gloabl metadata updates
@@ -143,6 +144,7 @@ typedef struct _flexpath_reader_file
     char *file_name;
     char *group_name; // assuming one group per file right now.
     int host_language;
+    int flexpath_flags;
 
     int verbose;
 
@@ -1839,6 +1841,8 @@ adios_read_flexpath_open(const char * fname,
         point = index(point, '\n') + 1;
         sscanf(point, "%p\n", &writer_filedata);
         point = index(point, '\n') + 1;
+	sscanf(point, "%d\n", &(fp->flexpath_flags));
+	point = index(point, '\n') + 1;
         while (*point != '\0') {
             //printf("Point: %s\nInputNewLineAbove\n", point);
             sscanf(point, "%d:%[^\t\n]", &their_stone, in_contact);
@@ -1859,11 +1863,29 @@ adios_read_flexpath_open(const char * fname,
         fp->num_bridges = num_bridges;
         free(contact_info);
 
+
         // broadcast writer contact info to all reader ranks
         fp_verbose(fp, "Broadcasting writer data to all ranks!\n");
         MPI_Bcast(&fp->num_bridges, 1, MPI_INT, 0, MPI_COMM_WORLD);
         
         MPI_Bcast(send_buffer, fp->num_bridges*CONTACT_LENGTH, MPI_CHAR, 0, MPI_COMM_WORLD);
+
+	MPI_Bcast(&fp->flexpath_flags, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+	//Set up weir master
+	if(IS_BLOCKING_ON(fp))
+	{
+	    char *weir_master_contact_str;
+	    weir_graph_type fp_graph_type = weir_tree_graph;
+	    fp->master_weir = weir_master_create(fp_read_data->cm, fp->size, fp_graph_type);
+	    weir_master_contact_str = weir_master_get_contact_list(fp->master_weir);
+	    if(!weir_master_contact_str)
+	        fprintf(stderr, "Error: weir_master_contact_string not set!\n");
+	    size_t weir_master_contact_str_size = strlen(weir_master_contact_str);
+	    MPI_Bcast(&weir_master_contact_str_size, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+	    MPI_Bcast(weir_master_contact_str, weir_master_contact_str_size, MPI_CHAR, 0, MPI_COMM_WORLD);
+	}
         
 	// prepare to send all ranks contact info to writer root
         reader_register_msg reader_register;
@@ -1892,17 +1914,38 @@ adios_read_flexpath_open(const char * fname,
 	free(recvbuf);
         free_attr_list(writer_rank0_contact);
 
+	if(IS_BLOCKING_ON(fp))
+	{
+	    //Weir client local setup
+	    int groups[1] = {1};
+	    fp->client_weir = weir_client_assoc_local(fp->cm, fp->master_weir, cod_code_weir, queue_list_weir, callback_for_weir, NULL, groups, 1);
+	}
+
         //CMConnection_close(conn);
         MPI_Barrier(MPI_COMM_WORLD);
     } else {
         /* not rank 0 */
         fp_verbose(fp, "About to run the normal setup for bridges before MPI_Gather operation!\n");
         char *this_side_contact_buffer;
+	char *master_string;
+	int master_string_size;
         MPI_Gather(data_contact_info, CONTACT_LENGTH, MPI_CHAR, recvbuf,
                    CONTACT_LENGTH, MPI_CHAR, 0, fp->comm);
         MPI_Bcast(&fp->num_bridges, 1, MPI_INT, 0, MPI_COMM_WORLD);
         this_side_contact_buffer = malloc(fp->num_bridges*CONTACT_LENGTH);
         MPI_Bcast(this_side_contact_buffer, fp->num_bridges*CONTACT_LENGTH, MPI_CHAR, 0, MPI_COMM_WORLD);
+	MPI_Bcast(&fp->flexpath_flags, 1, MPI_INT, 0, MPI_COMM_WORLD);
+	
+	if(IS_BLOCKING_ON(fp))
+	{
+	    //Set up weir
+	    MPI_Bcast(&master_string_size, 1, MPI_INT, 0, MPI_COMM_WORLD);
+	    master_string = malloc(sizeof(char) * master_string_size);
+	    MPI_Bcast(master_string, master_string_size, MPI_CHAR, 0, MPI_COMM_WORLD);
+	    int groups[1] = {1};
+	    fp->client_weir = weir_client_assoc(cm, master_string, cod_code_weir, queue_list_weir, callback_for_weir, NULL, groups, 1);
+	}
+
         fp->bridges = malloc(sizeof(bridge_info) * fp->num_bridges);
         for (i = 0; i < fp->num_bridges; i++) {
             int their_stone;
@@ -1920,7 +1963,9 @@ adios_read_flexpath_open(const char * fname,
     }
 
 
-    //EVstore Setup
+    //Weir Setup
+
+
 
 
     fp_verbose(fp, "About to lock mutex and access timstep_separated_var_list\n");

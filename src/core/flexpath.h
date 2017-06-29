@@ -18,12 +18,8 @@
 #define FP_ONLY_SCALARS "fp_only_scalars"
 #define FP_NATTRS "fp_number_of_attrs"
 
-#define CLOSE_MSG 0
-#define OPEN_MSG 1
-#define ACK_MSG 2
-#define INIT_MSG 3
-#define EOS_MSG 4
-#define FINALIZE_MSG 5
+#define NON_BLOCKING_ON 0x1
+#define STATIC_DISTRIBUTION 0x2
 
 #define FP_FORTRAN_MODE 1
 #define FP_C_MODE 0

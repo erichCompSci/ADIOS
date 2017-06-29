@@ -10,7 +10,7 @@
 </adios-group>
 
 <!-- The queue size says how many timesteps the writer can buffer before it blocks -->
-<method group="temperature"  method="FLEXPATH">QUEUE_SIZE=4;</method>    
+<method group="temperature"  method="FLEXPATH">QUEUE_SIZE=9;NON_BLOCKING_ON;</method>
 
 <buffer max-size-MB="20"/>
 

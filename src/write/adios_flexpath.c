@@ -146,6 +146,7 @@ typedef struct _flexpath_write_file_data {
 
     // server state
     int maxQueueSize;
+    int flexpath_flags;
     pthread_mutex_t queue_size_mutex;
     pthread_cond_t queue_size_condition;
 
@@ -1187,10 +1188,48 @@ adios_flexpath_open(struct adios_file_struct *fd,
     mem_check(fileData, "fileData");
     memset(fileData, 0, sizeof(FlexpathWriteFileData));
     fp_verbose_init(fileData);
+    // mpi setup, why duplicate?
+    MPI_Comm_dup(comm, &fileData->mpiComm);
+
+    MPI_Comm_rank((fileData->mpiComm), &fileData->rank);
+    MPI_Comm_size((fileData->mpiComm), &fileData->size);
 
     fileData->maxQueueSize = 42;
     if (method->parameters) {
-        sscanf(method->parameters, "QUEUE_SIZE=%d;", &fileData->maxQueueSize);
+	int max_queue_size = -1;
+	char * token = strtok(method->parameters, ";");
+	while(token)
+	{
+	    if(strncmp(token, "QUEUE_SIZE", 10) == 0)
+		sscanf(token, "QUEUE_SIZE=%d", &max_queue_size);
+	    else if (strncmp(token, "NON_BLOCKING_ON", 15) == 0)
+		fileData->flexpath_flags |= NON_BLOCKING_ON;
+	    else
+		fp_verbose(fileData, "Error: parameter unrecognized!\n");
+
+	    token = strtok(NULL, ";");
+	}
+
+	//Do checks for things and inform the user of choices made
+	if(max_queue_size == -1)
+	{
+	    fp_verbose(fileData, "Queue size not specified, default is 42!\n");
+	}
+	else
+	{
+	    fileData->maxQueueSize = max_queue_size;
+	    fp_verbose(fileData, "Queue size specified as: %d\n", fileData->maxQueueSize);
+	}
+
+	if(fileData->flexpath_flags & NON_BLOCKING_ON)
+	{
+	    fp_verbose(fileData, "NON_BLOCKING mode is set to on!\n");
+	}
+	else
+	{
+	    fp_verbose(fileData, "NON_BLOCKING mode is set to off!\n");
+	}
+    
     }
 
     pthread_mutex_init(&fileData->queue_size_mutex, NULL);
@@ -1204,11 +1243,6 @@ adios_flexpath_open(struct adios_file_struct *fd,
     flexpathWriteData.rank = fileData->rank;
     fileData->globalCount = 0;
 
-    // mpi setup, why?
-    MPI_Comm_dup(comm, &fileData->mpiComm);
-
-    MPI_Comm_rank((fileData->mpiComm), &fileData->rank);
-    MPI_Comm_size((fileData->mpiComm), &fileData->size);
     char *recv_buff = NULL;
     char sendmsg[CONTACT_LENGTH] = {0};
     if (fileData->rank == 0) {
@@ -1239,6 +1273,7 @@ adios_flexpath_open(struct adios_file_struct *fd,
         CMCondition_set_client_data(flexpathWriteData.cm, condition, &recv_buff);
         fprintf(writer_info, "%d\n", condition);
         fprintf(writer_info, "%p\n", fileData);
+	fprintf(writer_info, "%d\n", fileData->flexpath_flags);
         for (i = 0; i < fileData->size; i++) {
             fprintf(writer_info, "%s\n", &recv_buff[i * CONTACT_LENGTH]);
         }
