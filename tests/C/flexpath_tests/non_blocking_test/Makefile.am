@@ -18,4 +18,4 @@ reader_non_blocking_LDFLAGS = $(ADIOSLIB_LDFLAGS) $(ADIOSLIB_EXTRA_LDFLAGS)
 
 CLEANFILES = *.bp
 CC=$(MPICC)
-EXTRA_DIST = test_config_flex.xml run_tests.pl
+EXTRA_DIST = test_config_flex.xml

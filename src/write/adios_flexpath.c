@@ -393,7 +393,7 @@ char * multiqueue_action = "{\n\
             read_request *read_msg;\n\
             int oldest_timestep;\n\
 	    int time_req;\n\
-            read_msg = EVdata_read_request(0);\n\
+            read_msg = EVdata_read_request(i);\n\
             oldest_timestep = read_msg->current_lamport_min;\n\
 	    time_req = read_msg->timestep_requested;\n\
 	    fp_verbose(\"Oldest_timestep is %d, from reader %d\\n\", oldest_timestep, read_msg->process_return_id);\n \
