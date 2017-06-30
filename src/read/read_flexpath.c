@@ -21,6 +21,7 @@
 #include <atl.h>
 //#include <gen_thread.h>
 #include <evpath.h>
+#include <weir.h>
 
 #ifdef __MACH__
 #include <mach/clock.h>
@@ -173,6 +174,11 @@ typedef struct _flexpath_reader_file
     read_request_msg *var_read_requests;
     int go_cond;
 
+    //Weir stuff
+    weir_master master_weir;
+    weir_client	client_weir;
+    int lowest_timestep_seen;
+
     int num_vars;
     uint64_t data_read; // for perf measurements.
     double time_in; // for perf measurements.
@@ -190,6 +196,121 @@ typedef struct _local_read_data
     // EVPath stuff
     CManager cm;
 } flexpath_read_data;
+
+//Weir objects
+typedef struct _lamport_clock {
+    int number_of_clients;
+    int * local_view;
+} lamport_clock, *lamport_clock_ptr;
+
+static FMField lamport_clock_field_list[] =
+{
+    {"number_of_clients", "integer", sizeof(int), FMOffset(lamport_clock_ptr, number_of_clients)},
+    {"local_view", "integer[number_of_clients]", sizeof(int), FMOffset(lamport_clock_ptr, local_view)},
+    {NULL, NULL, 0, 0}
+};
+
+static FMStructDescRec lamport_clock_format_list[] =
+{
+    {"lamport_clock", lamport_clock_field_list, sizeof(lamport_clock), NULL},
+    {NULL, NULL, 0, NULL}
+};
+
+static FMStructDescList queue_list_weir[] = {lamport_clock_format_list, NULL};
+
+static char * cod_code_weir= "{\n\
+            static int number_procs = 0;\n\
+            static int local_count = 0;\n\
+            static int first_time = 1;\n\
+            static int * local_time;\n\
+            attr_list the_event_attrs = EVget_attrs_lamport_clock(0);\n\
+            int last_node_id;\n\
+            int my_node_id;\n\
+            last_node_id = attr_ivalue(the_event_attrs, \"last_node_id\");\n\
+            my_node_id = attr_ivalue(stone_attrs, \"my_node_id\");\n\
+            int i;\n\
+            lamport_clock * a_ptr = EVdata_lamport_clock(0);\n\
+            number_procs = a_ptr.number_of_clients;\n\
+            if(first_time)\n\
+            {\n\
+                local_time = malloc(sizeof(int) * number_procs);\n\
+                for(i = 0; i < number_procs; i++)\n\
+                {\n\
+                    local_time[i] = a_ptr->local_view[i];\n\
+                }\n\
+                first_time = 0;\n\
+            }\n\
+            else\n\
+            {\n\
+                lamport_clock * a_ptr = EVdata_lamport_clock(0);\n\
+                for(i = 0; i < number_procs; i++)\n\
+                {\n\
+                    if(a_ptr->local_view[i] > local_time[i])\n\
+                    {\n\
+			local_time[i] = a_ptr->local_view[i];\n\
+                    }\n\
+                }\n\
+            }\n\
+            lamport_clock to_send;\n\
+            to_send.number_of_clients = number_procs;\n\
+            for(i = 0; i < number_procs; i++)\n\
+            {\n\
+                to_send->local_view[i] = local_time[i];\n	\
+            }\n\
+            if(my_node_id == last_node_id)\n\
+            {\n\
+                local_count = local_count + 1;\n\
+                if(local_count == 3)\n\
+                {\n\
+		    int port = weir_get_port(the_event_attrs);\n\
+		    set_int_attr(the_event_attrs, \"last_node_id\", my_node_id);\n\
+		    EVsubmit_attr(port, to_send, the_event_attrs);\n\
+		    local_count = 0;\n\
+                }\n\
+                else \n\
+                {\n\
+                    EVsubmit(0, to_send);\n\
+                }\n\
+                EVdiscard_lamport_clock(0);\n\
+            }\n\
+            else\n\
+            {\n\
+		int port = weir_get_port(the_event_attrs);\n\
+		set_int_attr(the_event_attrs, \"last_node_id\", my_node_id);\n\
+                EVsubmit_attr(port, to_send, the_event_attrs);\n\
+                EVsubmit(0, to_send);\n\
+                EVdiscard_lamport_clock(0);\n\
+            }\n\
+        }\0\0";
+
+
+int
+callback_for_weir(CManager cm, void * vevent, void * client_data, attr_list attrs)
+{
+    flexpath_reader_file * fp = (flexpath_reader_file *) client_data;
+    lamport_clock_ptr event = (lamport_clock_ptr) vevent;
+    int i;
+    int lowest = event->local_view[0];
+    for(i = 1; i < event->number_of_clients; i++)
+    {
+	if(event->local_view[i] < lowest)
+	    lowest = event->local_view[i];
+    }
+
+    if(fp->lowest_timestep_seen < lowest)
+    {
+	fp_verbose(fp, "Setting new lowest to: %d\n", lowest);
+	fp->lowest_timestep_seen = lowest;
+    }
+    else if(fp->lowest_timestep_seen > lowest)
+    {
+	fprintf(stderr, "Error: lowest timestep seen has suddenly gone backward...impossible, severe error!\n");
+	exit(1);
+    }
+
+    return 1;
+}
+
 
 flexpath_read_data* fp_read_data = NULL;
 
@@ -1130,11 +1251,9 @@ send_read_msg(flexpath_reader_file *fp, int index, int use_condition)
     else
         msg->condition = -1;
 
-    //TODO: Change this part for the EVstore stuff
-    msg->current_lamport_min = -1;
+
+    msg->current_lamport_min = fp->lowest_timestep_seen;
     //Basic error checking so we don't break on simple things in the future
-
-
 
     if(!fp->bridges[destination].opened) 
     {
@@ -1885,6 +2004,10 @@ adios_read_flexpath_open(const char * fname,
 	    MPI_Bcast(&weir_master_contact_str_size, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
 	    MPI_Bcast(weir_master_contact_str, weir_master_contact_str_size, MPI_CHAR, 0, MPI_COMM_WORLD);
+	    //Weir client local setup
+	    int groups[1] = {1};
+	    fp->client_weir = weir_client_assoc_local(fp_read_data->cm, fp->master_weir, 
+							cod_code_weir, queue_list_weir, callback_for_weir, fp, groups, 1);
 	}
         
 	// prepare to send all ranks contact info to writer root
@@ -1914,13 +2037,6 @@ adios_read_flexpath_open(const char * fname,
 	free(recvbuf);
         free_attr_list(writer_rank0_contact);
 
-	if(IS_BLOCKING_ON(fp))
-	{
-	    //Weir client local setup
-	    int groups[1] = {1};
-	    fp->client_weir = weir_client_assoc_local(fp->cm, fp->master_weir, cod_code_weir, queue_list_weir, callback_for_weir, NULL, groups, 1);
-	}
-
         //CMConnection_close(conn);
         MPI_Barrier(MPI_COMM_WORLD);
     } else {
@@ -1943,7 +2059,7 @@ adios_read_flexpath_open(const char * fname,
 	    master_string = malloc(sizeof(char) * master_string_size);
 	    MPI_Bcast(master_string, master_string_size, MPI_CHAR, 0, MPI_COMM_WORLD);
 	    int groups[1] = {1};
-	    fp->client_weir = weir_client_assoc(cm, master_string, cod_code_weir, queue_list_weir, callback_for_weir, NULL, groups, 1);
+	    fp->client_weir = weir_client_assoc(fp_read_data->cm, master_string, cod_code_weir, queue_list_weir, callback_for_weir, fp, groups, 1);
 	}
 
         fp->bridges = malloc(sizeof(bridge_info) * fp->num_bridges);
@@ -2057,7 +2173,25 @@ adios_read_flexpath_advance_step(ADIOS_FILE *adiosfile, int last, float timeout_
 {    
     flexpath_reader_file *fp = (flexpath_reader_file*)adiosfile->fh;
     fp_verbose(fp, "Entering Flexpath Advance Step!\n");
-    MPI_Barrier(fp->comm);
+    int weir_node_id = 0;
+    static lamport_clock * local_update = NULL;
+    if(IS_BLOCKING_ON(fp))
+    {
+	weir_node_id = weir_get_client_id_in_group(fp->client_weir);
+	if(!local_update)
+	{
+	    local_update = calloc( 1, sizeof(lamport_clock));
+	    local_update->local_view = calloc(fp->size, sizeof(int));
+	    local_update->number_of_clients = fp->size;
+	}
+	local_update->local_view[weir_node_id - 1] = fp->mystep + 1;
+	weir_submit(fp->client_weir, local_update, NULL);
+    }
+    else
+    {
+	MPI_Barrier(fp->comm);
+	fp->lowest_timestep_seen = fp->mystep + 1;
+    }
     int count = 0;
     
     fp->mystep++;
@@ -2092,9 +2226,6 @@ adios_read_flexpath_advance_step(ADIOS_FILE *adiosfile, int last, float timeout_
     pthread_mutex_unlock(&(fp->queue_mutex));
 
     //Fix the last of the info the reader will need, this locks and unlocks the mutex so that's why we have it out here
-
-    //Wait for all readers to reach this step, this should change in extended version
-    //MPI_Barrier(fp->comm);
 
     return 0;
 }

@@ -391,22 +391,25 @@ char * multiqueue_action = "{\n\
         for(i = 0; i < EVcount_read_request(); i++)\n\
         {\n\
             read_request *read_msg;\n\
-            int time_req;\n\
+            int oldest_timestep;\n\
+	    int time_req;\n\
             read_msg = EVdata_read_request(0);\n\
-            time_req = read_msg->timestep_requested;\n\
-	    fp_verbose(\"Read request received for timestep %d, from reader %d\\n\", time_req, read_msg->process_return_id);\n \
+            oldest_timestep = read_msg->current_lamport_min;\n\
+	    time_req = read_msg->timestep_requested;\n\
+	    fp_verbose(\"Oldest_timestep is %d, from reader %d\\n\", oldest_timestep, read_msg->process_return_id);\n \
             int j;\n\
             for(j = 0; j < EVcount_anonymous(); j++)\n\
             {\n\
                 int data_timestep;\n\
                 attrs = EVget_attrs_anonymous(j);\n\
                 data_timestep = attr_ivalue(attrs, \"fp_timestep\");\n\
-                if(data_timestep < time_req)\n\
+                if(data_timestep < oldest_timestep)\n\
                 {\n\
                     EVdiscard_anonymous(j);\n\
                     j--;\n\
                 }\n\
-                else if(data_timestep == time_req)\n\
+		\n\
+                if(data_timestep == time_req)\n\
                 {\n\
                     int target;\n\
                     target = read_msg->process_return_id;\n\
