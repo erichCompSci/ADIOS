@@ -31,6 +31,9 @@ int main(int argc, char **argv)
     int NX, NY;
     int writer_size;
     double *t;
+    double start_time, end_time;
+    double start_time_in, end_time_in;
+    double individual_timesteps[100];
     MPI_Comm comm = MPI_COMM_WORLD;
     diag_t return_val;
     
@@ -42,6 +45,7 @@ int main(int argc, char **argv)
         adios_opts,
         "Runs readers.");
     MPI_Init(&argc, &argv);
+    start_time = MPI_Wtime();
     MPI_Comm_rank(comm, &rank);
 
     SET_ERROR_IF_NOT_ZERO(adios_read_init_method(adios_opts.method, comm,
@@ -59,6 +63,7 @@ int main(int argc, char **argv)
     int ii = 0;
     while (adios_errno != err_end_of_stream) {
 
+	start_time_in = MPI_Wtime();
         /* get a bounding box - rank 0 for now*/
         ADIOS_VARINFO *nx_info = adios_inq_var(afile, "NX");
         ADIOS_VARINFO *ny_info = adios_inq_var(afile, "NY");
@@ -122,10 +127,10 @@ int main(int argc, char **argv)
 	double random_number = rand();
 	int sleep_time = (int) ( random_number / RAND_MAX * 2) + 1; //Just to avoid the zero sleep_time
 	sleep(sleep_time);	
-	if(rank == 0)
-	    printf("About to advance step: %d\n", afile->current_step);
         adios_release_step(afile);
         adios_advance_step(afile, 0, 30);
+	end_time_in = MPI_Wtime();
+	individual_timesteps[ii] = end_time_in - start_time_in;
         ii++;
     }
 
@@ -133,6 +138,13 @@ just_clean:
     // clean everything
     free(t);
     t = NULL;
+
+
+
+    end_time = MPI_Wtime();
+    double total_time = end_time - start_time;
+
+
 
 close_adios:
     CLOSE_ADIOS_READER(afile, adios_opts.method);
