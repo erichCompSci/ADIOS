@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <sys/queue.h>
 #include <sys/socket.h>
 #include <sys/times.h>
@@ -54,7 +55,7 @@
 
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
-#define IS_BLOCKING_ON(fp) (fp->flexpath_flags & NON_BLOCKING_ON)
+#define IS_BLOCKING_ON(fp) (fp->flexpath_flags & (NON_BLOCKING_ON_TREE | NON_BLOCKING_ON_RING | NON_BLOCKING_ON_RING_OF_RINGS))
 
 //This is a linked list for the linked list of fp_vars
 //This is necessary to support push based gloabl metadata updates
@@ -1995,8 +1996,24 @@ adios_read_flexpath_open(const char * fname,
 	if(IS_BLOCKING_ON(fp))
 	{
 	    char *weir_master_contact_str;
-	    weir_graph_type fp_graph_type = weir_tree_graph;
+	    weir_graph_type fp_graph_type;
+	    if(fp->flexpath_flags & NON_BLOCKING_ON_TREE)
+		fp_graph_type = weir_tree_graph;
+	    else if(fp->flexpath_flags & (NON_BLOCKING_ON_RING | NON_BLOCKING_ON_RING_OF_RINGS))
+		fp_graph_type = weir_ring_graph;
+
 	    fp->master_weir = weir_master_create(fp_read_data->cm, fp->size, fp_graph_type);
+
+	    if(fp->flexpath_flags & NON_BLOCKING_ON_RING)
+	    {
+		weir_set_ring_size(fp->master_weir, fp->size);
+	    }
+	    else if(fp->flexpath_flags & NON_BLOCKING_ON_RING_OF_RINGS)
+	    {
+		double size_of_reader = (double) fp->size;
+		int inner_size = (int) sqrt(size_of_reader);
+		weir_set_ring_size(fp->master_weir, inner_size);
+	    }
 	    weir_master_contact_str = weir_master_get_contact_list(fp->master_weir);
 	    if(!weir_master_contact_str)
 	        fprintf(stderr, "Error: weir_master_contact_string not set!\n");
@@ -2059,6 +2076,8 @@ adios_read_flexpath_open(const char * fname,
 	    master_string = malloc(sizeof(char) * master_string_size);
 	    MPI_Bcast(master_string, master_string_size, MPI_CHAR, 0, MPI_COMM_WORLD);
 	    int groups[1] = {1};
+	    int sleep_time = fp->rank;
+	    sleep(sleep_time);
 	    fp->client_weir = weir_client_assoc(fp_read_data->cm, master_string, cod_code_weir, queue_list_weir, callback_for_weir, fp, groups, 1);
 	}
 

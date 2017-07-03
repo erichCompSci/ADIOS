@@ -28,6 +28,7 @@
 int main(int argc, char **argv)
 {
     int rank, j;
+    int size;
     int NX, NY;
     int writer_size;
     double *t;
@@ -39,7 +40,7 @@ int main(int argc, char **argv)
     
     struct err_counts err = {0, 0};
     struct adios_tsprt_opts adios_opts;
-    struct test_info test_result = {TEST_PASSED, "global_range_select"};
+    struct test_info test_result = {TEST_PASSED, "non_blocking"};
 
     GET_ENTRY_OPTIONS(
         adios_opts,
@@ -47,6 +48,7 @@ int main(int argc, char **argv)
     MPI_Init(&argc, &argv);
     start_time = MPI_Wtime();
     MPI_Comm_rank(comm, &rank);
+    MPI_Comm_size(comm, &size);
 
     SET_ERROR_IF_NOT_ZERO(adios_read_init_method(adios_opts.method, comm,
                                                  adios_opts.adios_options),
@@ -54,10 +56,20 @@ int main(int argc, char **argv)
     RET_IF_ERROR(err.adios, rank);
 
     /* schedule_read of a scalar. */
+    /*if(rank == 0)
+    {
+	int wait = 1;
+	while(wait)
+	{
+	    //Do nothing
+	}
+    }
+    */
     int test_scalar = -1;
     ADIOS_FILE *afile = adios_read_open(FILE_NAME, adios_opts.method, comm,
                                         ADIOS_LOCKMODE_NONE, 0.0);
     //Repeateable random sequence
+    int max_sleep;
     srand(rank);
 
     int ii = 0;
@@ -124,8 +136,9 @@ int main(int argc, char **argv)
         adios_perform_reads(afile, 1);
 
 	//Pause for some time randomly
+	max_sleep = 2;
 	double random_number = rand();
-	int sleep_time = (int) ( random_number / RAND_MAX * 2) + 1; //Just to avoid the zero sleep_time
+	int sleep_time = (int) ( random_number / RAND_MAX * max_sleep) + 1; //Just to avoid the zero sleep_time
 	sleep(sleep_time);	
         adios_release_step(afile);
         adios_advance_step(afile, 0, 30);
@@ -143,6 +156,57 @@ just_clean:
 
     end_time = MPI_Wtime();
     double total_time = end_time - start_time;
+    if(rank == 0)
+    {
+	double * final_times = calloc(size, sizeof(double));
+	double * independent_timestep_times = calloc(size * 100, sizeof(double));
+	MPI_Gather(&total_time, 1, MPI_DOUBLE, final_times, 1, MPI_DOUBLE, 0, comm);
+	MPI_Gather(individual_timesteps, 100, MPI_DOUBLE, independent_timestep_times, 100, MPI_DOUBLE, 0, comm);
+
+	char read_filename[100] = {FILE_NAME "_temp_out.txt"};
+	FILE * read_file = fopen(read_filename, "r");
+	int queue_size;
+	char graph_type[25];
+	fscanf(read_file, "%d", &queue_size);
+	fscanf(read_file, "%s", graph_type);
+	fclose(read_file);
+	unlink(read_filename);
+	time_t t = time(NULL);
+	struct tm * calendar = localtime(&t);
+	char filename[200];
+	sprintf(filename, "%s_%d-%d-%d_%d:%d:%d_%d-readers_%d-writers_%d-max_sleep_%d-queue_size_.txt", graph_type, calendar->tm_mon, 
+			    calendar->tm_mday, calendar->tm_year, calendar->tm_hour, calendar->tm_min, calendar->tm_sec, 
+			    size, writer_size, max_sleep, queue_size);
+	FILE * open_file = fopen(filename, "w");
+	int i, k;
+	for(i = 0; i < size; i++)
+	    fprintf(open_file, "Rank: %d\t\t\t", i);
+	fprintf(open_file, "\nFINAL_TIMES\n");
+	
+	for(i = 0; i < size; i++)
+	    fprintf(open_file, "%f\t\t", final_times[i]);
+	fprintf(open_file, "\nINDIVIDUAL_TIMES\n");
+
+	for(k = 0; k < 100; k++)
+	{
+	    for(i = 0; i < size; i++)
+	    {
+		fprintf(open_file, "%f\t\t", independent_timestep_times[k + i * 100]);
+	    }
+	    fprintf(open_file, "\n");
+	}
+
+	fclose(open_file);
+	
+	
+	
+    }
+    else
+    {
+	MPI_Gather(&total_time, 1, MPI_DOUBLE, NULL, 1, MPI_DOUBLE, 0, comm);
+	MPI_Gather(individual_timesteps, 100, MPI_DOUBLE, NULL, 100, MPI_DOUBLE, 0, comm);
+
+    }
 
 
 

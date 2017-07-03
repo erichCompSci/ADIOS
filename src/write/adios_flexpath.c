@@ -1201,12 +1201,29 @@ adios_flexpath_open(struct adios_file_struct *fd,
     if (method->parameters) {
 	int max_queue_size = -1;
 	char * token = strtok(method->parameters, ";");
+	char graph_type[50] = {"none"};
+	char temp_filename[100];
+
+	FILE * open_file;
+	sprintf(temp_filename, "%s_temp_out.txt", fd->name);
+	if(fileData->rank == 0)
+	    open_file = fopen(temp_filename, "w");
 	while(token)
 	{
 	    if(strncmp(token, "QUEUE_SIZE", 10) == 0)
 		sscanf(token, "QUEUE_SIZE=%d", &max_queue_size);
 	    else if (strncmp(token, "NON_BLOCKING_ON", 15) == 0)
-		fileData->flexpath_flags |= NON_BLOCKING_ON;
+	    {
+		sscanf(token, "NON_BLOCKING_ON=%s", graph_type);
+		if(strcmp(graph_type, "tree") == 0)
+		    fileData->flexpath_flags |= NON_BLOCKING_ON_TREE;
+		else if(strcmp(graph_type, "ring") == 0)
+		    fileData->flexpath_flags |= NON_BLOCKING_ON_RING;
+		else if(strcmp(graph_type, "ring_of_rings") == 0)
+		    fileData->flexpath_flags |= NON_BLOCKING_ON_RING_OF_RINGS;
+		else
+		    fprintf(stderr, "Error: unidentified NON_BLOCKING_TYPE\n");
+	    }
 	    else
 		fp_verbose(fileData, "Error: parameter unrecognized!\n");
 
@@ -1224,13 +1241,21 @@ adios_flexpath_open(struct adios_file_struct *fd,
 	    fp_verbose(fileData, "Queue size specified as: %d\n", fileData->maxQueueSize);
 	}
 
-	if(fileData->flexpath_flags & NON_BLOCKING_ON)
+	if(fileData->flexpath_flags & (NON_BLOCKING_ON_TREE | NON_BLOCKING_ON_RING | NON_BLOCKING_ON_RING_OF_RINGS))
 	{
-	    fp_verbose(fileData, "NON_BLOCKING mode is set to on!\n");
+	    fp_verbose(fileData, "NON_BLOCKING %s mode is set to on!\n", graph_type);
 	}
 	else
 	{
 	    fp_verbose(fileData, "NON_BLOCKING mode is set to off!\n");
+	}
+
+	//Push to temp file
+	if(fileData->rank == 0)
+	{
+	    fprintf(open_file,  "%d\n", fileData->maxQueueSize);
+	    fprintf(open_file,  "%s\n", graph_type);
+	    fclose(open_file);
 	}
     
     }

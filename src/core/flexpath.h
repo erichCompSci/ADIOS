@@ -18,8 +18,10 @@
 #define FP_ONLY_SCALARS "fp_only_scalars"
 #define FP_NATTRS "fp_number_of_attrs"
 
-#define NON_BLOCKING_ON 0x1
-#define STATIC_DISTRIBUTION 0x2
+#define STATIC_DISTRIBUTION 0x1
+#define NON_BLOCKING_ON_TREE 0x2
+#define NON_BLOCKING_ON_RING 0x4
+#define NON_BLOCKING_ON_RING_OF_RINGS 0x8
 
 #define FP_FORTRAN_MODE 1
 #define FP_C_MODE 0

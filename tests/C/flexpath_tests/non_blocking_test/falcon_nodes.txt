@@ -1,0 +1,17 @@
+falcon:
+falcon4.cc.gatech.edu
+falcon5.cc.gatech.edu
+falcon6.cc.gatech.edu
+falcon7.cc.gatech.edu
+falcon9.cc.gatech.edu
+falcon10.cc.gatech.edu
+falcon11.cc.gatech.edu
+falcon12.cc.gatech.edu
+falcon13.cc.gatech.edu
+falcon14.cc.gatech.edu
+falcon15.cc.gatech.edu
+falcon16.cc.gatech.edu
+falcon17.cc.gatech.edu
+falcon18.cc.gatech.edu
+falcon19.cc.gatech.edu
+falcon20.cc.gatech.edu
