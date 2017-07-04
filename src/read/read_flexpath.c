@@ -179,12 +179,15 @@ typedef struct _flexpath_reader_file
     weir_master master_weir;
     weir_client	client_weir;
     int lowest_timestep_seen;
+    int writer_queue_size;
 
     int num_vars;
     uint64_t data_read; // for perf measurements.
     double time_in; // for perf measurements.
     pthread_mutex_t queue_mutex;
+    pthread_mutex_t writer_queue_size_mutex;
     pthread_cond_t queue_condition;
+    pthread_cond_t writer_queue_size_condition;
 } flexpath_reader_file;
 
 typedef struct _local_read_data
@@ -227,28 +230,29 @@ static char * cod_code_weir= "{\n\
             attr_list the_event_attrs = EVget_attrs_lamport_clock(0);\n\
             int last_node_id;\n\
             int my_node_id;\n\
+	    int immediate;\n\
             last_node_id = attr_ivalue(the_event_attrs, \"last_node_id\");\n\
             my_node_id = attr_ivalue(stone_attrs, \"my_node_id\");\n\
+	    immediate = attr_ivalue(the_event_attrs, \"force_update\");\n\
             int i;\n\
-            lamport_clock * a_ptr = EVdata_lamport_clock(0);\n\
-            number_procs = a_ptr.number_of_clients;\n\
+            lamport_clock * clock_ptr = EVdata_lamport_clock(0);\n\
+            number_procs = clock_ptr.number_of_clients;\n\
             if(first_time)\n\
             {\n\
                 local_time = malloc(sizeof(int) * number_procs);\n\
                 for(i = 0; i < number_procs; i++)\n\
                 {\n\
-                    local_time[i] = a_ptr->local_view[i];\n\
+                    local_time[i] = clock_ptr->local_view[i];\n\
                 }\n\
                 first_time = 0;\n\
             }\n\
             else\n\
             {\n\
-                lamport_clock * a_ptr = EVdata_lamport_clock(0);\n\
                 for(i = 0; i < number_procs; i++)\n\
                 {\n\
-                    if(a_ptr->local_view[i] > local_time[i])\n\
+                    if(clock_ptr->local_view[i] > local_time[i])\n\
                     {\n\
-			local_time[i] = a_ptr->local_view[i];\n\
+			local_time[i] = clock_ptr->local_view[i];\n\
                     }\n\
                 }\n\
             }\n\
@@ -260,18 +264,28 @@ static char * cod_code_weir= "{\n\
             }\n\
             if(my_node_id == last_node_id)\n\
             {\n\
-                local_count = local_count + 1;\n\
-                if(local_count == 3)\n\
-                {\n\
+		if(immediate == 1)\n\
+		{\n\
 		    int port = weir_get_port(the_event_attrs);\n\
 		    set_int_attr(the_event_attrs, \"last_node_id\", my_node_id);\n\
 		    EVsubmit_attr(port, to_send, the_event_attrs);\n\
 		    local_count = 0;\n\
-                }\n\
-                else \n\
-                {\n\
-                    EVsubmit(0, to_send);\n\
-                }\n\
+		}\n\
+		else\n\
+		{\n\
+		    local_count = local_count + 1;\n\
+                    if(local_count == 3)\n\
+                    {\n\
+		        int port = weir_get_port(the_event_attrs);\n\
+		        set_int_attr(the_event_attrs, \"last_node_id\", my_node_id);\n\
+		        EVsubmit_attr(port, to_send, the_event_attrs);\n\
+		        local_count = 0;\n\
+                    }\n\
+                    else \n\
+                    {\n\
+                        EVsubmit(0, to_send);\n\
+                    }\n\
+		}\n\
                 EVdiscard_lamport_clock(0);\n\
             }\n\
             else\n\
@@ -298,6 +312,7 @@ callback_for_weir(CManager cm, void * vevent, void * client_data, attr_list attr
 	    lowest = event->local_view[i];
     }
 
+    pthread_mutex_lock(&(fp->writer_queue_size_mutex));
     if(fp->lowest_timestep_seen < lowest)
     {
 	fp_verbose(fp, "Setting new lowest to: %d\n", lowest);
@@ -308,6 +323,9 @@ callback_for_weir(CManager cm, void * vevent, void * client_data, attr_list attr
 	fprintf(stderr, "Error: lowest timestep seen has suddenly gone backward...impossible, severe error!\n");
 	exit(1);
     }
+
+    pthread_cond_signal(&(fp->writer_queue_size_condition));
+    pthread_mutex_unlock(&(fp->writer_queue_size_mutex));
 
     return 1;
 }
@@ -320,8 +338,84 @@ static atom_t TIMESTEP_ATOM = -1;
 static atom_t SCALAR_ATOM = -1;
 static atom_t NATTRS = -1;
 static atom_t CM_TRANSPORT = -1;
+static atom_t FORCE_UPDATE = -1;
 
 /********** Helper functions. **********/
+static void
+update_weir(flexpath_reader_file * fp, int urgent)
+{
+    static lamport_clock * local_update = NULL;
+    int weir_node_id = 0;
+    weir_node_id = weir_get_client_id_in_group(fp->client_weir);
+    if(!local_update)
+    {
+        local_update = calloc( 1, sizeof(lamport_clock));
+        local_update->local_view = calloc(fp->size, sizeof(int));
+        local_update->number_of_clients = fp->size;
+    }
+    attr_list curr_attr = create_attr_list();
+    add_int_attr(curr_attr, FORCE_UPDATE, urgent);   
+    
+    local_update->local_view[weir_node_id - 1] = fp->mystep;
+    weir_submit(fp->client_weir, local_update, curr_attr);
+}
+
+
+static int
+avoid_deadlock_get_min_timestep(flexpath_reader_file * fp, int requested)
+{
+    /*static int first_time = 1;
+    if(first_time)
+    {
+		int wait = 1;
+		while(wait && fp->rank == 1)
+		{
+		    }
+		MPI_Barrier(fp->comm);
+		first_time = 0;
+    }
+    */
+
+    int minimum = -1;
+    if(IS_BLOCKING_ON(fp))
+    {
+	pthread_mutex_lock(&(fp->writer_queue_size_mutex));
+    	int updated_tree_request = 0;
+    	while(fp->writer_queue_size <= (requested - fp->lowest_timestep_seen))
+    	{
+    	    pthread_mutex_unlock(&(fp->writer_queue_size_mutex));
+		
+	    CMusleep(fp_read_data->cm, 100000);
+	    //So the non designated nodes don't spin a lot
+    	    fp_verbose(fp, "Number of msgs in subtree is: %d\n", weir_get_number_msgs_in_subtree(fp->client_weir));
+    	    if(weir_get_number_msgs_in_subtree(fp->client_weir) == 0 && weir_get_client_id_in_group(fp->client_weir) == 1)
+    	    {
+    	        updated_tree_request++;
+    	        update_weir(fp, 1);
+    	        fp_verbose(fp, "Requested Update on the tree %d times\n", updated_tree_request);
+    	    }
+    	    
+    	    int number_msgs = weir_get_number_msgs_in_subtree(fp->client_weir); 
+    	    pthread_mutex_lock(&(fp->writer_queue_size_mutex));
+    	    if(number_msgs != 0)
+    	    {
+    	        fp_verbose(fp, "Waiting for an update to my clock with %d outstanding messages\n", number_msgs);
+    	        pthread_cond_wait(&(fp->writer_queue_size_condition), &(fp->writer_queue_size_mutex));
+    	        fp_verbose(fp, "Received signal! Requested is: %d and lowest is: %d\n", requested, fp->lowest_timestep_seen);
+    	    }
+    	}
+	minimum = fp->lowest_timestep_seen;
+    	pthread_mutex_unlock(&(fp->writer_queue_size_mutex));
+    }
+    else
+    {
+	minimum = fp->lowest_timestep_seen;
+    }
+
+    fp_verbose(fp, "Returning minimum of: %d\n", minimum);
+    return minimum;
+}
+
 
 flexpath_var*
 new_flexpath_var(const char *varname, int id, uint64_t type_size)
@@ -896,7 +990,9 @@ new_flexpath_reader_file(const char *fname)
     fp->last_writer_step = -1;
     fp->go_cond = -1;
     pthread_mutex_init(&fp->queue_mutex, NULL);
+    pthread_mutex_init(&fp->writer_queue_size_mutex, NULL);
     pthread_cond_init(&fp->queue_condition, NULL);
+    pthread_cond_init(&fp->writer_queue_size_condition, NULL);
     return fp;
 }
 
@@ -1253,7 +1349,7 @@ send_read_msg(flexpath_reader_file *fp, int index, int use_condition)
         msg->condition = -1;
 
 
-    msg->current_lamport_min = fp->lowest_timestep_seen;
+    msg->current_lamport_min = avoid_deadlock_get_min_timestep(fp, msg->timestep_requested);
     //Basic error checking so we don't break on simple things in the future
 
     if(!fp->bridges[destination].opened) 
@@ -1790,6 +1886,7 @@ adios_read_flexpath_init_method (MPI_Comm comm, PairStruct* params)
     SCALAR_ATOM = attr_atom_from_string(FP_ONLY_SCALARS);
     NATTRS = attr_atom_from_string(FP_NATTRS);
     CM_TRANSPORT = attr_atom_from_string("CM_TRANSPORT");
+    FORCE_UPDATE = attr_atom_from_string("force_update");
 
     fp_read_data = malloc(sizeof(flexpath_read_data));
     if (!fp_read_data) {
@@ -1963,6 +2060,8 @@ adios_read_flexpath_open(const char * fname,
         point = index(point, '\n') + 1;
 	sscanf(point, "%d\n", &(fp->flexpath_flags));
 	point = index(point, '\n') + 1;
+	sscanf(point, "%d\n", &(fp->writer_queue_size));
+	point = index(point, '\n') + 1;
         while (*point != '\0') {
             //printf("Point: %s\nInputNewLineAbove\n", point);
             sscanf(point, "%d:%[^\t\n]", &their_stone, in_contact);
@@ -1991,6 +2090,8 @@ adios_read_flexpath_open(const char * fname,
         MPI_Bcast(send_buffer, fp->num_bridges*CONTACT_LENGTH, MPI_CHAR, 0, MPI_COMM_WORLD);
 
 	MPI_Bcast(&fp->flexpath_flags, 1, MPI_INT, 0, MPI_COMM_WORLD);
+	
+	MPI_Bcast(&fp->writer_queue_size, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
 	//Set up weir master
 	if(IS_BLOCKING_ON(fp))
@@ -2068,6 +2169,7 @@ adios_read_flexpath_open(const char * fname,
         this_side_contact_buffer = malloc(fp->num_bridges*CONTACT_LENGTH);
         MPI_Bcast(this_side_contact_buffer, fp->num_bridges*CONTACT_LENGTH, MPI_CHAR, 0, MPI_COMM_WORLD);
 	MPI_Bcast(&fp->flexpath_flags, 1, MPI_INT, 0, MPI_COMM_WORLD);
+	MPI_Bcast(&fp->writer_queue_size, 1, MPI_INT, 0, MPI_COMM_WORLD);
 	
 	if(IS_BLOCKING_ON(fp))
 	{
@@ -2192,28 +2294,18 @@ adios_read_flexpath_advance_step(ADIOS_FILE *adiosfile, int last, float timeout_
 {    
     flexpath_reader_file *fp = (flexpath_reader_file*)adiosfile->fh;
     fp_verbose(fp, "Entering Flexpath Advance Step!\n");
-    int weir_node_id = 0;
-    static lamport_clock * local_update = NULL;
+    fp->mystep++;
     if(IS_BLOCKING_ON(fp))
     {
-	weir_node_id = weir_get_client_id_in_group(fp->client_weir);
-	if(!local_update)
-	{
-	    local_update = calloc( 1, sizeof(lamport_clock));
-	    local_update->local_view = calloc(fp->size, sizeof(int));
-	    local_update->number_of_clients = fp->size;
-	}
-	local_update->local_view[weir_node_id - 1] = fp->mystep + 1;
-	weir_submit(fp->client_weir, local_update, NULL);
+	update_weir(fp, 0);
     }
     else
     {
 	MPI_Barrier(fp->comm);
-	fp->lowest_timestep_seen = fp->mystep + 1;
+	fp->lowest_timestep_seen = fp->mystep;
     }
     int count = 0;
     
-    fp->mystep++;
 
     adiosfile->current_step = fp->mystep;
     adiosfile->last_step = adiosfile->current_step;
@@ -2252,6 +2344,18 @@ adios_read_flexpath_advance_step(ADIOS_FILE *adiosfile, int last, float timeout_
 int adios_read_flexpath_close(ADIOS_FILE * fp)
 {
     flexpath_reader_file *file = (flexpath_reader_file*)fp->fh;
+    if(IS_BLOCKING_ON(file))
+    {
+	pthread_mutex_lock(&(file->writer_queue_size_mutex));
+	while(file->lowest_timestep_seen != file->mystep)
+	{
+	    pthread_mutex_unlock(&(file->writer_queue_size_mutex));
+	    avoid_deadlock_get_min_timestep(file, file->mystep + file->writer_queue_size - 1);
+	    pthread_mutex_lock(&(file->writer_queue_size_mutex));
+	}
+	pthread_mutex_unlock(&(file->writer_queue_size_mutex));
+	update_weir(file, 1);
+    }
 
     MPI_Barrier(file->comm);
 

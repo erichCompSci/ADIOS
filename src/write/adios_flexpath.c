@@ -382,6 +382,7 @@ get_var_offsets(struct adios_var_struct *v,
 
 
 char * multiqueue_action = "{\n\
+    fp_verbose(\"Entering multiqueue_action\\n\");\n\
     static int lowest_timestamp = 0;\n\
     attr_list attrs;\n\
     int old_num_data_in_queue = EVcount_anonymous();\n\
@@ -433,6 +434,7 @@ char * multiqueue_action = "{\n\
         new.size = num_data_in_queue;\n\
         EVsubmit(0, new);\n\
     }\n\
+    fp_verbose(\"Leaving multiqueue_action\\n\");\n\
 }";
 
 
@@ -1302,6 +1304,7 @@ adios_flexpath_open(struct adios_file_struct *fd,
         fprintf(writer_info, "%d\n", condition);
         fprintf(writer_info, "%p\n", fileData);
 	fprintf(writer_info, "%d\n", fileData->flexpath_flags);
+	fprintf(writer_info, "%d\n", fileData->maxQueueSize);
         for (i = 0; i < fileData->size; i++) {
             fprintf(writer_info, "%s\n", &recv_buff[i * CONTACT_LENGTH]);
         }

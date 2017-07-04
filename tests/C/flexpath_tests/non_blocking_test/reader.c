@@ -56,7 +56,7 @@ int main(int argc, char **argv)
     RET_IF_ERROR(err.adios, rank);
 
     /* schedule_read of a scalar. */
-    /*if(rank == 0)
+    /*if(rank == 1)
     {
 	int wait = 1;
 	while(wait)
@@ -65,6 +65,7 @@ int main(int argc, char **argv)
 	}
     }
     */
+    
     int test_scalar = -1;
     ADIOS_FILE *afile = adios_read_open(FILE_NAME, adios_opts.method, comm,
                                         ADIOS_LOCKMODE_NONE, 0.0);
@@ -152,7 +153,8 @@ just_clean:
     free(t);
     t = NULL;
 
-
+    adios_read_close(afile);
+    adios_read_finalize_method(adios_opts.method);
 
     end_time = MPI_Wtime();
     double total_time = end_time - start_time;
@@ -211,7 +213,6 @@ just_clean:
 
 
 close_adios:
-    CLOSE_ADIOS_READER(afile, adios_opts.method);
-
+    MPI_Finalize();
     return 0;
 }
