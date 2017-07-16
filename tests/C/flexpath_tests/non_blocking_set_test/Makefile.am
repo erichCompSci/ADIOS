@@ -1,0 +1,21 @@
+AM_CPPFLAGS = $(all_includes)
+AM_CPPFLAGS += -I$(top_builddir)/src/public -I$(top_srcdir)/src -I$(top_srcdir)/src/public -I$(srcdir)/../include
+
+AUTOMAKE_OPTIONS = no-dependencies subdir-objects
+
+all-local:
+	test "$(srcdir)" = "$(builddir)" || cp $(srcdir)/*.xml $(builddir)
+	test "$(srcdir)" = "$(builddir)" || cp $(srcdir)/run_tests.pl $(builddir)
+
+noinst_PROGRAMS = writer_non_blocking_set reader_non_blocking_set
+
+writer_non_blocking_set_SOURCES = writer.c ../common/utils.c
+writer_non_blocking_set_LDADD = $(top_builddir)/src/libadios.a $(ADIOSLIB_LDADD)
+writer_non_blocking_set_LDFLAGS = $(ADIOSLIB_LDFLAGS) $(ADIOSLIB_EXTRA_LDFLAGS)
+reader_non_blocking_set_SOURCES = reader.c ../common/utils.c
+reader_non_blocking_set_LDADD = $(top_builddir)/src/libadios.a $(ADIOSLIB_LDADD)
+reader_non_blocking_set_LDFLAGS = $(ADIOSLIB_LDFLAGS) $(ADIOSLIB_EXTRA_LDFLAGS)
+
+CLEANFILES = *.bp
+CC=$(MPICC)
+EXTRA_DIST = test_config_flex.xml

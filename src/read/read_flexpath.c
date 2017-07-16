@@ -180,6 +180,7 @@ typedef struct _flexpath_reader_file
     weir_client	client_weir;
     int lowest_timestep_seen;
     int writer_queue_size;
+    int debug_msg;
 
     int num_vars;
     uint64_t data_read; // for perf measurements.
@@ -304,6 +305,7 @@ callback_for_weir(CManager cm, void * vevent, void * client_data, attr_list attr
 {
     flexpath_reader_file * fp = (flexpath_reader_file *) client_data;
     lamport_clock_ptr event = (lamport_clock_ptr) vevent;
+
     int i;
     int lowest = event->local_view[0];
     for(i = 1; i < event->number_of_clients; i++)
@@ -364,18 +366,6 @@ update_weir(flexpath_reader_file * fp, int urgent)
 static int
 avoid_deadlock_get_min_timestep(flexpath_reader_file * fp, int requested)
 {
-    /*static int first_time = 1;
-    if(first_time)
-    {
-		int wait = 1;
-		while(wait && fp->rank == 1)
-		{
-		    }
-		MPI_Barrier(fp->comm);
-		first_time = 0;
-    }
-    */
-
     int minimum = -1;
     if(IS_BLOCKING_ON(fp))
     {
@@ -664,6 +654,11 @@ void flexpath_wait_for_global_metadata(flexpath_reader_file *fp, int timestep)
         fp_verbose(
             fp, "Waiting for writer to send the global data for timestep: %d\n",
             timestep);
+	//We need to shake loose updates if the root is waiting
+	if(IS_BLOCKING_ON(fp))
+    	{
+    	    update_weir(fp, 1);
+    	}
         pthread_cond_wait(&(fp->queue_condition), &(fp->queue_mutex));
         fp_verbose(fp, "Received signal! Last_writer_step:%d\t\tMystep:%d\n",
                    fp->last_writer_step, timestep);
@@ -2118,7 +2113,7 @@ adios_read_flexpath_open(const char * fname,
 	    weir_master_contact_str = weir_master_get_contact_list(fp->master_weir);
 	    if(!weir_master_contact_str)
 	        fprintf(stderr, "Error: weir_master_contact_string not set!\n");
-	    size_t weir_master_contact_str_size = strlen(weir_master_contact_str);
+	    size_t weir_master_contact_str_size = strlen(weir_master_contact_str) + 1;
 	    MPI_Bcast(&weir_master_contact_str_size, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
 	    MPI_Bcast(weir_master_contact_str, weir_master_contact_str_size, MPI_CHAR, 0, MPI_COMM_WORLD);
@@ -2175,7 +2170,7 @@ adios_read_flexpath_open(const char * fname,
 	{
 	    //Set up weir
 	    MPI_Bcast(&master_string_size, 1, MPI_INT, 0, MPI_COMM_WORLD);
-	    master_string = malloc(sizeof(char) * master_string_size);
+	    master_string = malloc(sizeof(char) * master_string_size + 1);
 	    MPI_Bcast(master_string, master_string_size, MPI_CHAR, 0, MPI_COMM_WORLD);
 	    int groups[1] = {1};
 	    int sleep_time = fp->rank;
@@ -2355,8 +2350,17 @@ int adios_read_flexpath_close(ADIOS_FILE * fp)
 	}
 	pthread_mutex_unlock(&(file->writer_queue_size_mutex));
 	update_weir(file, 1);
-    }
 
+	while(weir_get_number_msgs_in_subtree(file->client_weir) != 0)
+    	{
+    	    //Wait, for all messages to get out of the tree 
+    	    CMusleep(fp_read_data->cm, 100000);
+    	}
+	int ID = weir_get_client_id_in_group(file->client_weir);
+	int num = weir_get_number_msgs_in_subtree(file->client_weir);
+	fprintf(stderr, "Weir ID: %d has num_msgs = %d\n", ID, num);
+
+    }
     MPI_Barrier(file->comm);
 
     
@@ -2367,6 +2371,14 @@ int adios_read_flexpath_close(ADIOS_FILE * fp)
     data has already been copied over to ADIOS_VARINFO structs
     that the user maintains a copy of.
     */
+
+    /*int wait = 1;
+    while(wait)
+    {
+	CMusleep(fp_read_data->cm, 10000);
+    }
+    */
+    
 
     flexpath_free_filedata(file);
     CManager_close(fp_read_data->cm);

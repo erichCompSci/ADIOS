@@ -1,5 +1,4 @@
 falcon:
-falcon4.cc.gatech.edu
 falcon5.cc.gatech.edu
 falcon6.cc.gatech.edu
 falcon7.cc.gatech.edu
