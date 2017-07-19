@@ -2173,8 +2173,8 @@ adios_read_flexpath_open(const char * fname,
 	    master_string = malloc(sizeof(char) * master_string_size + 1);
 	    MPI_Bcast(master_string, master_string_size, MPI_CHAR, 0, MPI_COMM_WORLD);
 	    int groups[1] = {1};
-	    int sleep_time = fp->rank;
-	    sleep(sleep_time);
+	    //int sleep_time = fp->rank;
+	    //sleep(sleep_time);
 	    fp->client_weir = weir_client_assoc(fp_read_data->cm, master_string, cod_code_weir, queue_list_weir, callback_for_weir, fp, groups, 1);
 	}
 

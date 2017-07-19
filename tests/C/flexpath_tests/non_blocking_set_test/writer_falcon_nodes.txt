@@ -3,3 +3,6 @@ falcon40.cc.gatech.edu
 falcon41.cc.gatech.edu
 falcon42.cc.gatech.edu
 falcon43.cc.gatech.edu
+falcon50.cc.gatech.edu
+falcon51.cc.gatech.edu
+falcon52.cc.gatech.edu

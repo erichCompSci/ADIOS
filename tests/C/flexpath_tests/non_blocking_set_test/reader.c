@@ -127,9 +127,9 @@ int main(int argc, char **argv)
 	
 	uint64_t offset = writer_size / size;
 	uint64_t rank_count = ((writer_size - rank * offset) < offset) ? writer_size - rank * offset : offset;
-	printf("Rank: %d --- Writer_size: %d\n",rank, writer_size);
-	printf("Rank: %d --- Reader_size: %d\n",rank,  size);
-	printf("Rank: %d --- Rank_count: %d\n", rank,  rank_count); 
+	//printf("Rank: %d --- Writer_size: %d\n",rank, writer_size);
+	//printf("Rank: %d --- Reader_size: %d\n",rank,  size);
+	//printf("Rank: %d --- Rank_count: %d\n", rank,  rank_count); 
 	
 	//MPI_Barrier(comm);
 	//exit(1);
