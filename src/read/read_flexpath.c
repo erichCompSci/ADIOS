@@ -2121,6 +2121,7 @@ adios_read_flexpath_open(const char * fname,
 	    int groups[1] = {1};
 	    fp->client_weir = weir_client_assoc_local(fp_read_data->cm, fp->master_weir, 
 							cod_code_weir, queue_list_weir, callback_for_weir, fp, groups, 1);
+	    weir_client_ready_wait(fp->client_weir);
 	}
         
 	// prepare to send all ranks contact info to writer root
@@ -2151,7 +2152,6 @@ adios_read_flexpath_open(const char * fname,
         free_attr_list(writer_rank0_contact);
 
         //CMConnection_close(conn);
-        MPI_Barrier(MPI_COMM_WORLD);
     } else {
         /* not rank 0 */
         fp_verbose(fp, "About to run the normal setup for bridges before MPI_Gather operation!\n");
@@ -2176,6 +2176,7 @@ adios_read_flexpath_open(const char * fname,
 	    //int sleep_time = fp->rank;
 	    //sleep(sleep_time);
 	    fp->client_weir = weir_client_assoc(fp_read_data->cm, master_string, cod_code_weir, queue_list_weir, callback_for_weir, fp, groups, 1);
+	    weir_client_ready_wait(fp->client_weir);
 	}
 
         fp->bridges = malloc(sizeof(bridge_info) * fp->num_bridges);
@@ -2190,11 +2191,10 @@ adios_read_flexpath_open(const char * fname,
             fp->bridges[i].opened = 0;
             fp->bridges[i].scheduled = 0;
         }
-        MPI_Barrier(MPI_COMM_WORLD);
-        fp_verbose(fp, "Past the MPI_Barrier on the non-root side\n");
     }
 
-
+    MPI_Barrier(MPI_COMM_WORLD);
+    fp_verbose(fp, "Past the MPI_Barrier, all sides should be ready to roll!\n");
     //Weir Setup
 
 
@@ -2356,9 +2356,9 @@ int adios_read_flexpath_close(ADIOS_FILE * fp)
     	    //Wait, for all messages to get out of the tree 
     	    CMusleep(fp_read_data->cm, 100000);
     	}
-	int ID = weir_get_client_id_in_group(file->client_weir);
-	int num = weir_get_number_msgs_in_subtree(file->client_weir);
-	fprintf(stderr, "Weir ID: %d has num_msgs = %d\n", ID, num);
+	//int ID = weir_get_client_id_in_group(file->client_weir);
+	//int num = weir_get_number_msgs_in_subtree(file->client_weir);
+	//fprintf(stderr, "Weir ID: %d has num_msgs = %d\n", ID, num);
 
     }
     MPI_Barrier(file->comm);
