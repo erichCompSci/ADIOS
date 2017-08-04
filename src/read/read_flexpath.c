@@ -272,21 +272,6 @@ static char * cod_code_weir= "{\n\
 		    EVsubmit_attr(port, to_send, the_event_attrs);\n\
 		    local_count = 0;\n\
 		}\n\
-		else\n\
-		{\n\
-		    local_count = local_count + 1;\n\
-                    if(local_count == 3)\n\
-                    {\n\
-		        int port = weir_get_port(the_event_attrs);\n\
-		        set_int_attr(the_event_attrs, \"last_node_id\", my_node_id);\n\
-		        EVsubmit_attr(port, to_send, the_event_attrs);\n\
-		        local_count = 0;\n\
-                    }\n\
-                    else \n\
-                    {\n\
-                        EVsubmit(0, to_send);\n\
-                    }\n\
-		}\n\
                 EVdiscard_lamport_clock(0);\n\
             }\n\
             else\n\
@@ -373,11 +358,26 @@ avoid_deadlock_get_min_timestep(flexpath_reader_file * fp, int requested)
     	int updated_tree_request = 0;
     	while(fp->writer_queue_size <= (requested - fp->lowest_timestep_seen))
     	{
-    	    pthread_mutex_unlock(&(fp->writer_queue_size_mutex));
 		
+	    pthread_mutex_unlock(&(fp->writer_queue_size_mutex));
 	    CMusleep(fp_read_data->cm, 100000);
+
+    	    updated_tree_request++;
+	    //This is messed up because the weir has to control the ordering of the locking...need to discuss this with someone probably
+	    update_weir(fp, 1);
+	    pthread_mutex_lock(&(fp->writer_queue_size_mutex));
+
+	    if(fp->writer_queue_size > (requested - fp->lowest_timestep_seen))
+	        break;
+    	    //fp_verbose(fp, "Writer_queue_size: %d\tRequested: %d\tLowest_timestep_seen: %d\n", 
+			//fp->writer_queue_size, requested, fp->lowest_timestep_seen);
+    	    //fp_verbose(fp, "Requested Update on the tree %d times\n", updated_tree_request);
+    	    fp_verbose(fp, "Waiting for an update to my clock\n");
+    	    pthread_cond_wait(&(fp->writer_queue_size_condition), &(fp->writer_queue_size_mutex));
+    	    fp_verbose(fp, "Received signal! Requested is: %d and lowest is: %d\n", requested, fp->lowest_timestep_seen);
+	    
 	    //So the non designated nodes don't spin a lot
-    	    fp_verbose(fp, "Number of msgs in subtree is: %d\n", weir_get_number_msgs_in_subtree(fp->client_weir));
+    	    /*fp_verbose(fp, "Number of msgs in subtree is: %d\n", weir_get_number_msgs_in_subtree(fp->client_weir));
     	    if(weir_get_number_msgs_in_subtree(fp->client_weir) == 0 && weir_get_client_id_in_group(fp->client_weir) == 1)
     	    {
     	        updated_tree_request++;
@@ -387,12 +387,13 @@ avoid_deadlock_get_min_timestep(flexpath_reader_file * fp, int requested)
     	    
     	    int number_msgs = weir_get_number_msgs_in_subtree(fp->client_weir); 
     	    pthread_mutex_lock(&(fp->writer_queue_size_mutex));
-    	    if(number_msgs != 0)
+    	    if(number_msgs != 0 && !CManager_locked(fp_read_data->cm))
     	    {
     	        fp_verbose(fp, "Waiting for an update to my clock with %d outstanding messages\n", number_msgs);
     	        pthread_cond_wait(&(fp->writer_queue_size_condition), &(fp->writer_queue_size_mutex));
     	        fp_verbose(fp, "Received signal! Requested is: %d and lowest is: %d\n", requested, fp->lowest_timestep_seen);
     	    }
+	    */
     	}
 	minimum = fp->lowest_timestep_seen;
     	pthread_mutex_unlock(&(fp->writer_queue_size_mutex));
@@ -1345,6 +1346,10 @@ send_read_msg(flexpath_reader_file *fp, int index, int use_condition)
 
 
     msg->current_lamport_min = avoid_deadlock_get_min_timestep(fp, msg->timestep_requested);
+    if(IS_BLOCKING_ON(fp))
+    {
+	update_weir(fp, 1);
+    }
     //Basic error checking so we don't break on simple things in the future
 
     if(!fp->bridges[destination].opened) 
@@ -2290,11 +2295,7 @@ adios_read_flexpath_advance_step(ADIOS_FILE *adiosfile, int last, float timeout_
     flexpath_reader_file *fp = (flexpath_reader_file*)adiosfile->fh;
     fp_verbose(fp, "Entering Flexpath Advance Step!\n");
     fp->mystep++;
-    if(IS_BLOCKING_ON(fp))
-    {
-	update_weir(fp, 0);
-    }
-    else
+    if(!IS_BLOCKING_ON(fp))
     {
 	MPI_Barrier(fp->comm);
 	fp->lowest_timestep_seen = fp->mystep;
@@ -2351,11 +2352,8 @@ int adios_read_flexpath_close(ADIOS_FILE * fp)
 	pthread_mutex_unlock(&(file->writer_queue_size_mutex));
 	update_weir(file, 1);
 
-	while(weir_get_number_msgs_in_subtree(file->client_weir) != 0)
-    	{
-    	    //Wait, for all messages to get out of the tree 
-    	    CMusleep(fp_read_data->cm, 100000);
-    	}
+	weir_send_shutdown_and_wait(file->client_weir);
+	
 	//int ID = weir_get_client_id_in_group(file->client_weir);
 	//int num = weir_get_number_msgs_in_subtree(file->client_weir);
 	//fprintf(stderr, "Weir ID: %d has num_msgs = %d\n", ID, num);

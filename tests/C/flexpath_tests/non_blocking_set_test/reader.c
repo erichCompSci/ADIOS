@@ -77,6 +77,7 @@ int main(int argc, char **argv)
     while (adios_errno != err_end_of_stream) {
 
 	start_time_in = MPI_Wtime();
+	MPI_Barrier(comm);
         /* get a bounding box - rank 0 for now*/
         ADIOS_VARINFO *nx_info = adios_inq_var(afile, "NX");
         ADIOS_VARINFO *ny_info = adios_inq_var(afile, "NY");
@@ -152,6 +153,7 @@ int main(int argc, char **argv)
 
         adios_perform_reads(afile, 1);
 
+	MPI_Barrier(comm);
 	//Pause for some time randomly
 	max_sleep = 2;
 	double random_number = rand();
