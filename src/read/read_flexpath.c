@@ -807,12 +807,12 @@ flexpath_var_free(flexpath_var * tmpvars)
 	for (i=0; i<tmpvars->num_chunks; i++) {
 	    flexpath_var_chunk *chunk = &tmpvars->chunks[i];
 	    if (chunk->has_data) {
-		//free(chunk->data);
+		if (chunk->data) free(chunk->data);
 		chunk->data = NULL;
 		chunk->has_data = 0;
 	    }
 	}
-	
+	free(tmpvars->chunks);
 
 
         flexpath_var * tmp = tmpvars->next;
@@ -2096,7 +2096,7 @@ adios_read_flexpath_open(const char * fname,
 
         // broadcast writer contact info to all reader ranks
         fp_verbose(fp, "Broadcasting writer data to all ranks!\n");
-        MPI_Bcast(&fp->num_bridges, 1, MPI_INT, 0, MPI_COMM_WORLD);
+        MPI_Bcast(&fp->num_bridges, 1, MPI_INT, 0, fp->comm);
         
         MPI_Bcast(send_buffer, fp->num_bridges*CONTACT_LENGTH, MPI_CHAR, 0, MPI_COMM_WORLD);
 
@@ -2168,6 +2168,7 @@ adios_read_flexpath_open(const char * fname,
         free_attr_list(writer_rank0_contact);
 
         //CMConnection_close(conn);
+        MPI_Barrier(fp->comm);
     } else {
         /* not rank 0 */
         fp_verbose(fp, "About to run the normal setup for bridges before MPI_Gather operation!\n");
@@ -2176,8 +2177,9 @@ adios_read_flexpath_open(const char * fname,
 	int master_string_size;
         MPI_Gather(data_contact_info, CONTACT_LENGTH, MPI_CHAR, recvbuf,
                    CONTACT_LENGTH, MPI_CHAR, 0, fp->comm);
-        MPI_Bcast(&fp->num_bridges, 1, MPI_INT, 0, MPI_COMM_WORLD);
+        MPI_Bcast(&fp->num_bridges, 1, MPI_INT, 0, fp->comm);
         this_side_contact_buffer = malloc(fp->num_bridges*CONTACT_LENGTH);
+
         MPI_Bcast(this_side_contact_buffer, fp->num_bridges*CONTACT_LENGTH, MPI_CHAR, 0, MPI_COMM_WORLD);
 	MPI_Bcast(&fp->flexpath_flags, 1, MPI_INT, 0, MPI_COMM_WORLD);
 	MPI_Bcast(&fp->writer_queue_size, 1, MPI_INT, 0, MPI_COMM_WORLD);
@@ -2207,13 +2209,13 @@ adios_read_flexpath_open(const char * fname,
             fp->bridges[i].opened = 0;
             fp->bridges[i].scheduled = 0;
         }
+
+        MPI_Barrier(fp->comm);
+        fp_verbose(fp, "Past the MPI_Barrier on the non-root side\n");
     }
 
     MPI_Barrier(MPI_COMM_WORLD);
     fp_verbose(fp, "Past the MPI_Barrier, all sides should be ready to roll!\n");
-    //Weir Setup
-
-
 
 
     fp_verbose(fp, "About to lock mutex and access timstep_separated_var_list\n");
