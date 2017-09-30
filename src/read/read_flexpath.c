@@ -290,8 +290,19 @@ callback_for_weir(CManager cm, void * vevent, void * client_data, attr_list attr
 {
     flexpath_reader_file * fp = (flexpath_reader_file *) client_data;
     lamport_clock_ptr event = (lamport_clock_ptr) vevent;
-
     int i;
+    if(fp->verbose)
+    {
+	fp_verbose(fp, "Clock value: ");
+	
+	for(i = 0; i < event->number_of_clients; i++)
+	{
+	    fprintf(stdout, "%d ", event->local_view[i]);
+	}
+	fprintf(stdout, "\n");
+    }
+    //fp_verbose(fp, "Setting new lowest to: %d\n", lowest);
+
     int lowest = event->local_view[0];
     for(i = 1; i < event->number_of_clients; i++)
     {
@@ -302,7 +313,7 @@ callback_for_weir(CManager cm, void * vevent, void * client_data, attr_list attr
     pthread_mutex_lock(&(fp->writer_queue_size_mutex));
     if(fp->lowest_timestep_seen < lowest)
     {
-	fp_verbose(fp, "Setting new lowest to: %d\n", lowest);
+	//fp_verbose(fp, "Setting new lowest to: %d\n", lowest);
 	fp->lowest_timestep_seen = lowest;
     }
     else if(fp->lowest_timestep_seen > lowest)
