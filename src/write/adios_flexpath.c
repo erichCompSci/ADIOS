@@ -1,4 +1,3 @@
-
 /*
     adios_flexpath.c
     uses evpath for io in conjunction with read/read_flexpath.c
@@ -48,6 +47,8 @@
 #define FLEXPATH_SIDE "WRITER"
 #include "core/flexpath.h"
 #include <sys/queue.h>
+
+#define FLEXPATH_QUEUE_LOG
 
 /************************* Structure and Type Definitions ***********************/
 // used for messages in the control queue
@@ -135,6 +136,12 @@ typedef struct _flexpath_per_subscriber_info {
 
 } *subscriber_info;
 
+//Used for monitoring the queue size locally
+typedef struct _flexpath_queue_log_entry {
+    int     queue_change; //1 for entry, 0 for delete
+    double  timestamp;
+} flexpath_queue_log_entry;
+
 // information used per each flexpath file
 typedef struct _flexpath_write_file_data {
     // MPI stuff
@@ -168,6 +175,12 @@ typedef struct _flexpath_write_file_data {
     // general
     int verbose;
     int failed;   /* set if all output stones are closed */
+
+    //monitoring
+    flexpath_queue_log_entry * queue_log;
+    int current_index_into_log;
+    int buffer_increment;
+
 } FlexpathWriteFileData;
 
 typedef struct _flexpath_write_data {
@@ -175,6 +188,7 @@ typedef struct _flexpath_write_data {
     FlexpathWriteFileData* openFiles;
     CManager cm;
 } FlexpathWriteData;
+
 
 /************************* Global Variable Declarations *************************/
 static atom_t RANK_ATOM = -1;
@@ -431,11 +445,20 @@ char * multiqueue_action = "{\n\
     if(old_num_data_in_queue > num_data_in_queue)\n\
     {\n\
         queue_size_msg new;\n\
-        new.size = num_data_in_queue;\n\
+        new.size = num_data_in_queue - old_num_data_in_queue;\n\
         EVsubmit(0, new);\n\
     }\n\
     fp_verbose(\"Leaving multiqueue_action\\n\");\n\
 }";
+
+static void
+check_if_log_overrun(FlexpathWriterFileData * fp)
+{
+    if(fp->current_index_into_log % buffer_increment == 0)
+    {
+        fp->queue_log = realloc(fp->queue_log, sizeof(flexpath_queue_log_entry) * (fp->current_index_into_log + buffer_increment));
+    }
+}
 
 
 static int
@@ -459,8 +482,14 @@ static int
 queue_size_msg_handler(CManager cm, void*vevent, void*client_data, attr_list attrs)
 {
     FlexpathWriteFileData * fp = (FlexpathWriteFileData *) client_data;
-    fp_verbose(fp, "Sending the condition signal that the queue_size has changed!\n");
+    queue_size_msg_ptr event = (queue_size_msg_ptr) vevent;
     pthread_mutex_lock(&(fp->queue_size_mutex));
+#ifdef FLEXPATH_QUEUE_LOG
+    check_if_log_overun(fp);
+    fp->queue_log[fp->current_index_into_log].queue_change = event->queue_size_change;
+    fp->queue_log[fp->current_index_into_log++].timestamp = MPI_Wtime();
+#endif
+    fp_verbose(fp, "Sending the condition signal that the queue_size has changed!\n");
     pthread_cond_signal(&(fp->queue_size_condition));
     pthread_mutex_unlock(&(fp->queue_size_mutex));
     return 0;
@@ -1443,6 +1472,11 @@ adios_flexpath_open(struct adios_file_struct *fd,
         fp_verbose(fileData, "Writer Rank 0 sending GO message to reader rank 0\n");
         CMwrite(sub->reader_0_conn, format, &go_msg);
     }
+
+#ifdef FLEXPATH_QUEUE_LOG
+    fileData->buffer_increment = 200;
+    fileData->queue_log = calloc(fileData->buffer_increment, sizeof(flexpath_queue_log_entry));
+#endif
     return 0;
 }
 
@@ -1798,6 +1832,7 @@ adios_flexpath_close(struct adios_file_struct *fd, struct adios_method_struct *m
     EVsubmit_general(sub->scalarDataSource, temp, free_data_buffer, temp_attr_scalars);
 
     //Testing against the maxqueuesize
+    //DATA RACE exists here...need to lock queue_size_mutex the entire time
     int current_queue_size; 
     attr_list multiqueue_attrs = EVextract_attr_list(flexpathWriteData.cm, sub->multiStone);
     if(!get_int_attr(multiqueue_attrs, QUEUE_SIZE, &current_queue_size)) {
@@ -1815,6 +1850,16 @@ adios_flexpath_close(struct adios_file_struct *fd, struct adios_method_struct *m
             fprintf(stderr, "Error: Couldn't find queue_size in multiqueue stone attrs!\n");
         }
     }
+
+#ifdef FLEXPATH_QUEUE_LOG
+    pthread_mutex_lock(&(fileData->queue_size_mutex));
+    check_if_log_overun(fileData);
+    fileData->queue_log[fileData->current_index_into_log].queue_change = 1;
+    fileData->queue_log[(fileData->current_index_into_log)++].timestamp = MPI_Wtime();
+    pthread_mutex_unlock(&(fileData->queue_size_mutex));
+#endif
+    
+    
 
 
     //Full data is submitted to multiqueue stone

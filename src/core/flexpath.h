@@ -130,12 +130,12 @@ typedef struct _double_complex_dummy
 } double_complex_dummy;
 
 typedef struct _queue_size_msg {
-    int queue_size;
+    int queue_size_change;
 } queue_size_msg, *queue_size_msg_ptr;
 
 static FMField queue_size_msg_field_list[]=
 {
-    {"size", "integer", sizeof(int), FMOffset(queue_size_msg_ptr, queue_size)},
+    {"size", "integer", sizeof(int), FMOffset(queue_size_msg_ptr, queue_size_change)},
     {NULL, NULL, 0, 0}
 };
 
