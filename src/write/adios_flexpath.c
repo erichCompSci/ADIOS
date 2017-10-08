@@ -1732,6 +1732,7 @@ adios_flexpath_close(struct adios_file_struct *fd, struct adios_method_struct *m
     EVsubmit_general(sub->scalarDataSource, temp, free_data_buffer, temp_attr_scalars);
 
     //Testing against the maxqueuesize
+    pthread_mutex_lock(&(fileData->queue_size_mutex));
     int current_queue_size; 
     attr_list multiqueue_attrs = EVextract_attr_list(flexpathWriteData.cm, sub->multiStone);
     if(!get_int_attr(multiqueue_attrs, QUEUE_SIZE, &current_queue_size)) {
@@ -1739,16 +1740,15 @@ adios_flexpath_close(struct adios_file_struct *fd, struct adios_method_struct *m
     }
 
     while(current_queue_size == fileData->maxQueueSize) {
-        pthread_mutex_lock(&(fileData->queue_size_mutex));
         fp_verbose(fileData, "Waiting for queue to become less full on timestep: %d\n", fileData->writerStep);
         pthread_cond_wait(&(fileData->queue_size_condition), &(fileData->queue_size_mutex));
         fp_verbose(fileData, "Received queue_size signal!\n");
-        pthread_mutex_unlock(&(fileData->queue_size_mutex));
 
         if(!get_int_attr(multiqueue_attrs, QUEUE_SIZE, &current_queue_size)) {
             fprintf(stderr, "Error: Couldn't find queue_size in multiqueue stone attrs!\n");
         }
     }
+    pthread_mutex_unlock(&(fileData->queue_size_mutex));
 
 
     //Full data is submitted to multiqueue stone
