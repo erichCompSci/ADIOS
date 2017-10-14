@@ -201,7 +201,28 @@ static atom_t NATTRS = -1;
 // used for global communication and data structures
 FlexpathWriteData flexpathWriteData;
 
+
 /**************************** Function Definitions *********************************/
+
+static void
+fp_verbose_wrapper(char *format, ...)
+{
+    static int fp_verbose_set = -1;
+    static int MPI_rank = -1;
+    if (fp_verbose_set == -1) {
+        fp_verbose_set = (getenv("FLEXPATH_VERBOSE") != NULL);
+        MPI_rank = flexpathWriteData.rank;
+    }
+    if (fp_verbose_set) {
+        va_list args;
+
+        va_start(args, format);
+        fprintf(stdout, "%s %d:", FLEXPATH_SIDE, MPI_rank);
+        vfprintf(stdout, format, args);
+        va_end(args);
+    }
+}
+
 static void 
 reverse_dims(uint64_t *dims, int len)
 {
@@ -452,11 +473,11 @@ char * multiqueue_action = "{\n\
 }";
 
 static void
-check_if_log_overrun(FlexpathWriterFileData * fp)
+check_if_log_overrun(FlexpathWriteFileData * fp)
 {
-    if(fp->current_index_into_log % buffer_increment == 0)
+    if(fp->current_index_into_log % fp->buffer_increment == 0)
     {
-        fp->queue_log = realloc(fp->queue_log, sizeof(flexpath_queue_log_entry) * (fp->current_index_into_log + buffer_increment));
+        fp->queue_log = realloc(fp->queue_log, sizeof(flexpath_queue_log_entry) * (fp->current_index_into_log + fp->buffer_increment));
     }
 }
 
@@ -485,7 +506,7 @@ queue_size_msg_handler(CManager cm, void*vevent, void*client_data, attr_list att
     queue_size_msg_ptr event = (queue_size_msg_ptr) vevent;
     pthread_mutex_lock(&(fp->queue_size_mutex));
 #ifdef FLEXPATH_QUEUE_LOG
-    check_if_log_overun(fp);
+    check_if_log_overrun(fp);
     fp->queue_log[fp->current_index_into_log].queue_change = event->queue_size_change;
     fp->queue_log[fp->current_index_into_log++].timestamp = MPI_Wtime();
 #endif
@@ -1125,24 +1146,6 @@ reader_register_handler(CManager cm, CMConnection conn, void *vmsg, void *client
     CMCondition_signal(cm, msg->condition);
 }
 
-static void
-fp_verbose_wrapper(char *format, ...)
-{
-    static int fp_verbose_set = -1;
-    static int MPI_rank = -1;
-    if (fp_verbose_set == -1) {
-        fp_verbose_set = (getenv("FLEXPATH_VERBOSE") != NULL);
-        MPI_rank = flexpathWriteData.rank;
-    }
-    if (fp_verbose_set) {
-        va_list args;
-
-        va_start(args, format);
-        fprintf(stdout, "%s %d:", FLEXPATH_SIDE, MPI_rank);
-        vfprintf(stdout, format, args);
-        va_end(args);
-    }
-}
 
 // Initializes flexpath write local data structures
 extern void 
@@ -1850,7 +1853,7 @@ adios_flexpath_close(struct adios_file_struct *fd, struct adios_method_struct *m
     }
 
 #ifdef FLEXPATH_QUEUE_LOG
-    check_if_log_overun(fileData);
+    check_if_log_overrun(fileData);
     fileData->queue_log[fileData->current_index_into_log].queue_change = 1;
     fileData->queue_log[(fileData->current_index_into_log)++].timestamp = MPI_Wtime();
 #endif
@@ -1902,6 +1905,66 @@ adios_flexpath_finalize(int mype, struct adios_method_struct *method)
             fp_verbose(fileData, "Finished Wait for reader cohort to be finished!\n");
         }
 	fileData->finalized = 1;
+#ifdef FLEXPATH_QUEUE_LOG
+        //Martial the data into two arrays, one of ints, the other of doubles
+        int * local_queue_step_info = calloc(fileData->current_index_into_log, sizeof(int));
+        double * local_queue_timestep_info = calloc(fileData->current_index_into_log, sizeof(double));
+        int i;
+        for(i = 0; i < fileData->current_index_into_log; i++)
+        {
+            local_queue_step_info[i] = fileData->queue_log[i].queue_change;
+            local_queue_timestep_info[i] = fileData->queue_log[i].timestamp;
+        }
+
+
+
+        if(fileData->rank == 0)
+        {
+            int * array_sizes = calloc(fileData->size, sizeof(int));
+            int * displacements = calloc(fileData->size, sizeof(int));
+            MPI_Gather(&(fileData->current_index_into_log), 1, MPI_INT, array_sizes, 1, MPI_INT, 0, fileData->mpiComm);
+            int total_final_size = array_sizes[0];
+            displacements[0] = 0;
+
+            for(i = 1; i < fileData->size; i++)
+            {
+                displacements[i] = array_sizes[i - 1] + displacements[i - 1];
+                total_final_size += array_sizes[i];
+            }
+            printf("Total_final_size: %d\n", total_final_size);
+            int * queue_size_steps = calloc(total_final_size, sizeof(int));
+            double * queue_timesteps = calloc(total_final_size, sizeof(double));
+            MPI_Gatherv(local_queue_step_info, fileData->current_index_into_log, MPI_INT, queue_size_steps, array_sizes, displacements, 
+                        MPI_INT, 0, fileData->mpiComm);
+            MPI_Gatherv(local_queue_timestep_info, fileData->current_index_into_log, MPI_DOUBLE, queue_timesteps, array_sizes, displacements, 
+                        MPI_DOUBLE, 0, fileData->mpiComm);
+
+            FILE *queue_size_info = fopen("flexpath_queue_log.out", "w");
+            int j;
+            for(i = 0; i < fileData->size; i++)
+            {
+                fprintf(queue_size_info, "Rank %d\n", i);
+                int begin = displacements[i];
+                for(j = 0; j < array_sizes[i]; j++)
+                    fprintf(queue_size_info, "%d: %f\n", queue_size_steps[begin + j], queue_timesteps[begin + j]);
+            }
+            fclose(queue_size_info);
+            free(queue_timesteps);
+            free(queue_size_steps);
+            free(displacements);
+            free(array_sizes);
+        }
+        else
+        {
+
+            MPI_Gather(&(fileData->current_index_into_log), 1, MPI_INT, NULL, 1, MPI_INT, 0, fileData->mpiComm);
+            MPI_Gatherv(local_queue_step_info, fileData->current_index_into_log, MPI_INT, NULL, NULL, NULL, MPI_INT, 0, fileData->mpiComm);
+            MPI_Gatherv(local_queue_timestep_info, fileData->current_index_into_log, MPI_DOUBLE, NULL, NULL, NULL, MPI_DOUBLE, 0, fileData->mpiComm);
+        }
+        MPI_Barrier(fileData->mpiComm);
+        free(local_queue_step_info);
+        free(local_queue_timestep_info);
+#endif
 	fileData = fileData->next;	    
     }
 

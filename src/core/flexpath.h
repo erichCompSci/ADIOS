@@ -43,6 +43,7 @@
 
 #define CONTACT_STR_LEN 50
 
+
 typedef struct _finalize_close_msg {
     int finalize;
     int close;

@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <math.h>
 #include <sys/queue.h>
 #include <sys/socket.h>
@@ -18,6 +19,7 @@
 #include <stdlib.h>
 
 // evpath libraries
+#include <cod.h>
 #include <ffs.h>
 #include <atl.h>
 //#include <gen_thread.h>
@@ -309,6 +311,7 @@ callback_for_weir(CManager cm, void * vevent, void * client_data, attr_list attr
 	if(event->local_view[i] < lowest)
 	    lowest = event->local_view[i];
     }
+    fp_verbose(fp, "Lowest timestep in event is: %d\n", lowest);
 
     pthread_mutex_lock(&(fp->writer_queue_size_mutex));
     if(fp->lowest_timestep_seen < lowest)
@@ -318,6 +321,7 @@ callback_for_weir(CManager cm, void * vevent, void * client_data, attr_list attr
     }
     else if(fp->lowest_timestep_seen > lowest)
     {
+    	fp_verbose(fp, "Error: lowest timestep seen should be: %d but is: %d\n", fp->lowest_timestep_seen, lowest);
 	fprintf(stderr, "Error: lowest timestep seen has suddenly gone backward...impossible, severe error!\n");
 	exit(1);
     }
@@ -329,7 +333,6 @@ callback_for_weir(CManager cm, void * vevent, void * client_data, attr_list attr
 }
 
 
-flexpath_read_data* fp_read_data = NULL;
 
 static atom_t RANK_ATOM = -1;
 static atom_t TIMESTEP_ATOM = -1;
@@ -338,7 +341,29 @@ static atom_t NATTRS = -1;
 static atom_t CM_TRANSPORT = -1;
 static atom_t FORCE_UPDATE = -1;
 
+flexpath_read_data* fp_read_data = NULL;
+
 /********** Helper functions. **********/
+
+static void
+fp_verbose_wrapper(char *format, ...)
+{
+    static int fp_verbose_set = -1;
+    static int MPI_rank = -1;
+    if (fp_verbose_set == -1) {
+        fp_verbose_set = (getenv("FLEXPATH_VERBOSE") != NULL);
+        MPI_rank = fp_read_data->rank;
+    }
+    if (fp_verbose_set) {
+        va_list args;
+
+        va_start(args, format);
+        fprintf(stdout, "%s %d:", FLEXPATH_SIDE, MPI_rank);
+        vfprintf(stdout, format, args);
+        va_end(args);
+    }
+}
+
 static void
 update_weir(flexpath_reader_file * fp, int urgent)
 {
@@ -1890,6 +1915,8 @@ reader_go_handler(CManager cm, CMConnection conn, void *vmsg, void *client_data,
 int
 adios_read_flexpath_init_method (MPI_Comm comm, PairStruct* params)
 {
+    static cod_extern_entry externs[] = {   {"fp_verbose", (void*) 0},    {NULL, NULL}};
+    externs[0].extern_value = fp_verbose_wrapper;
     setenv("CMSelfFormats", "1", 1);
     // setup ATOMS for attribute lists
     RANK_ATOM = attr_atom_from_string(FP_RANK_ATTR_NAME);
@@ -1916,6 +1943,7 @@ adios_read_flexpath_init_method (MPI_Comm comm, PairStruct* params)
     MPI_Comm_rank(fp_read_data->comm, &(fp_read_data->rank));
 
     fp_read_data->cm = CManager_create();
+    EVadd_standard_routines(fp_read_data->cm, "void fp_verbose(string format, ...);",  externs);
     if (transport == NULL) {
       int listened = 0;
       while (listened == 0) {
