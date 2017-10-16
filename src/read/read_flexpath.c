@@ -230,6 +230,7 @@ static char * cod_code_weir= "{\n\
             static int local_count = 0;\n\
             static int first_time = 1;\n\
             static int * local_time;\n\
+            static int message_count = 0;\n\
             attr_list the_event_attrs = EVget_attrs_lamport_clock(0);\n\
             int last_node_id;\n\
             int my_node_id;\n\
@@ -271,6 +272,11 @@ static char * cod_code_weir= "{\n\
 		{\n\
 		    int port = weir_get_port(the_event_attrs);\n\
 		    set_int_attr(the_event_attrs, \"last_node_id\", my_node_id);\n\
+                    if(port == 0)\n\
+                    {\n\
+                        set_int_attr(the_event_attrs, \"message_count\", message_count);\n\
+                        message_count = message_count + 1;\n\
+                    }\n\
 		    EVsubmit_attr(port, to_send, the_event_attrs);\n\
 		    local_count = 0;\n\
 		}\n\
@@ -280,8 +286,15 @@ static char * cod_code_weir= "{\n\
             {\n\
 		int port = weir_get_port(the_event_attrs);\n\
 		set_int_attr(the_event_attrs, \"last_node_id\", my_node_id);\n\
+                if(port == 0)\n\
+                {\n\
+                    set_int_attr(the_event_attrs, \"message_count\", message_count);\n\
+                    message_count = message_count + 1;\n\
+                }\n\
                 EVsubmit_attr(port, to_send, the_event_attrs);\n\
-                EVsubmit(0, to_send);\n\
+                set_int_attr(the_event_attrs, \"message_count\", message_count);\n\
+                message_count = message_count + 1;\n\
+                EVsubmit_attr(0, to_send, the_event_attrs);\n\
                 EVdiscard_lamport_clock(0);\n\
             }\n\
         }\0\0";
@@ -290,8 +303,10 @@ static char * cod_code_weir= "{\n\
 int
 callback_for_weir(CManager cm, void * vevent, void * client_data, attr_list attrs)
 {
+    int out_message;
     flexpath_reader_file * fp = (flexpath_reader_file *) client_data;
     lamport_clock_ptr event = (lamport_clock_ptr) vevent;
+    get_int_attr(attrs, MESSAGE_COUNT, &out_message);
     int i;
     if(fp->verbose)
     {
@@ -311,7 +326,8 @@ callback_for_weir(CManager cm, void * vevent, void * client_data, attr_list attr
 	if(event->local_view[i] < lowest)
 	    lowest = event->local_view[i];
     }
-    fp_verbose(fp, "Lowest timestep in event is: %d\n", lowest);
+    //fp_verbose(fp, "Lowest timestep in event is: %d\n", lowest);
+    fp_verbose(fp, "Latest out message is: %d\n", out_message);
 
     pthread_mutex_lock(&(fp->writer_queue_size_mutex));
     if(fp->lowest_timestep_seen < lowest)
@@ -325,6 +341,7 @@ callback_for_weir(CManager cm, void * vevent, void * client_data, attr_list attr
 	fprintf(stderr, "Error: lowest timestep seen has suddenly gone backward...impossible, severe error!\n");
 	exit(1);
     }
+    
 
     pthread_cond_signal(&(fp->writer_queue_size_condition));
     pthread_mutex_unlock(&(fp->writer_queue_size_mutex));
@@ -340,6 +357,7 @@ static atom_t SCALAR_ATOM = -1;
 static atom_t NATTRS = -1;
 static atom_t CM_TRANSPORT = -1;
 static atom_t FORCE_UPDATE = -1;
+static atom_t MESSAGE_COUNT = -1;
 
 flexpath_read_data* fp_read_data = NULL;
 
@@ -1925,6 +1943,7 @@ adios_read_flexpath_init_method (MPI_Comm comm, PairStruct* params)
     NATTRS = attr_atom_from_string(FP_NATTRS);
     CM_TRANSPORT = attr_atom_from_string("CM_TRANSPORT");
     FORCE_UPDATE = attr_atom_from_string("force_update");
+    MESSAGE_COUNT = attr_atom_from_string("message_count");
 
     fp_read_data = malloc(sizeof(flexpath_read_data));
     if (!fp_read_data) {

@@ -1282,7 +1282,7 @@ adios_flexpath_open(struct adios_file_struct *fd,
 	    fp_verbose(fileData, "NON_BLOCKING mode is set to off!\n");
 	}
 
-	//Push to temp file
+	//Push to temp file, this is for a specific test and needs to be removed for production
 	if(fileData->rank == 0)
 	{
 	    fprintf(open_file,  "%d\n", fileData->maxQueueSize);
@@ -1939,7 +1939,9 @@ adios_flexpath_finalize(int mype, struct adios_method_struct *method)
             MPI_Gatherv(local_queue_timestep_info, fileData->current_index_into_log, MPI_DOUBLE, queue_timesteps, array_sizes, displacements, 
                         MPI_DOUBLE, 0, fileData->mpiComm);
 
-            FILE *queue_size_info = fopen("flexpath_queue_log.out", "w");
+            char log_filename[200];
+            sprintf(log_filename, "flexpath_queue_log_%d_%d.out", fileData->maxQueueSize, sub->total_num_readers);
+            FILE *queue_size_info = fopen(log_filename, "w");
             int j;
             for(i = 0; i < fileData->size; i++)
             {
