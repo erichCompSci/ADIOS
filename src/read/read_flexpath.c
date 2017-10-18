@@ -300,6 +300,16 @@ static char * cod_code_weir= "{\n\
         }\0\0";
 
 
+static atom_t RANK_ATOM = -1;
+static atom_t TIMESTEP_ATOM = -1;
+static atom_t SCALAR_ATOM = -1;
+static atom_t NATTRS = -1;
+static atom_t CM_TRANSPORT = -1;
+static atom_t FORCE_UPDATE = -1;
+static atom_t MESSAGE_COUNT = -1;
+
+flexpath_read_data* fp_read_data = NULL;
+
 int
 callback_for_weir(CManager cm, void * vevent, void * client_data, attr_list attrs)
 {
@@ -351,15 +361,6 @@ callback_for_weir(CManager cm, void * vevent, void * client_data, attr_list attr
 
 
 
-static atom_t RANK_ATOM = -1;
-static atom_t TIMESTEP_ATOM = -1;
-static atom_t SCALAR_ATOM = -1;
-static atom_t NATTRS = -1;
-static atom_t CM_TRANSPORT = -1;
-static atom_t FORCE_UPDATE = -1;
-static atom_t MESSAGE_COUNT = -1;
-
-flexpath_read_data* fp_read_data = NULL;
 
 /********** Helper functions. **********/
 
