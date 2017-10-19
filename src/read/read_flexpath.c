@@ -231,7 +231,8 @@ static char * cod_code_weir= "{\n\
             static int first_time = 1;\n\
             static int * local_time;\n\
             static int message_count = 0;\n\
-            attr_list the_event_attrs = EVget_attrs_lamport_clock(0);\n\
+            attr_list the_old_event_attrs = EVget_attrs_lamport_clock(0);\n\
+            attr_list the_event_attrs = copy_attr_list(the_old_event_attrs);\n\
             int last_node_id;\n\
             int my_node_id;\n\
 	    int immediate;\n\
@@ -291,10 +292,11 @@ static char * cod_code_weir= "{\n\
                     set_int_attr(the_event_attrs, \"message_count\", message_count);\n\
                     message_count = message_count + 1;\n\
                 }\n\
+                attr_list extra_attrs = copy_attr_list(the_event_attrs);\n\
                 EVsubmit_attr(port, to_send, the_event_attrs);\n\
-                set_int_attr(the_event_attrs, \"message_count\", message_count);\n\
+                set_int_attr(extra_attrs, \"message_count\", message_count);\n\
                 message_count = message_count + 1;\n\
-                EVsubmit_attr(0, to_send, the_event_attrs);\n\
+                EVsubmit_attr(0, to_send, extra_attrs);\n\
                 EVdiscard_lamport_clock(0);\n\
             }\n\
         }\0\0";
