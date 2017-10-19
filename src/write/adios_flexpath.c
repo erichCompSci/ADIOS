@@ -1478,7 +1478,8 @@ adios_flexpath_open(struct adios_file_struct *fd,
 
 #ifdef FLEXPATH_QUEUE_LOG
     fileData->buffer_increment = 200;
-    fileData->queue_log = calloc(fileData->buffer_increment, sizeof(flexpath_queue_log_entry));
+    //I think memory leak below due to logic, but I'm not sure so I'm keeping it in for now.  Remove if works 
+    //fileData->queue_log = calloc(fileData->buffer_increment, sizeof(flexpath_queue_log_entry));
 #endif
     return 0;
 }
@@ -1939,8 +1940,11 @@ adios_flexpath_finalize(int mype, struct adios_method_struct *method)
             MPI_Gatherv(local_queue_timestep_info, fileData->current_index_into_log, MPI_DOUBLE, queue_timesteps, array_sizes, displacements, 
                         MPI_DOUBLE, 0, fileData->mpiComm);
 
-            char log_filename[200];
-            sprintf(log_filename, "flexpath_queue_log_%d_%d.out", fileData->maxQueueSize, sub->total_num_readers);
+            char log_filename[400];
+            sprintf(log_filename, "flexpath_queue_log_%d_queueSize_%d_numReaders_%d_numWriters.out", 
+                                                                                                    fileData->maxQueueSize,
+                                                                                                    sub->total_num_readers,
+                                                                                                    fileData->size);
             FILE *queue_size_info = fopen(log_filename, "w");
             int j;
             for(i = 0; i < fileData->size; i++)

@@ -2,7 +2,7 @@
 
 #PBS -N test_weir
 #PBS -A CSC143 
-#PBS -l nodes=18,walltime=2:00:00 
+#PBS -l nodes=67,walltime=2:30:00 
 #PBS -j oe
 #PBS -o both.out
 
@@ -30,7 +30,7 @@ module load perl
 #export FLEXPATH_VERBOSE=1
 
 WRITER_PROCS=32
-READER_PROCS=(4 16 32 64 128 256)
+READER_PROCS=(4 16 32 64 128 256 1040)
 QUEUE_SIZES=(4 16 32 64)
 METHOD=("NON_BLOCKING_ON=tree;")  #"non_blocking_off;" "NON_BLOCKING_ON=ring;" "NON_BLOCKING_ON=ring_of_rings;")
 COUNT=0

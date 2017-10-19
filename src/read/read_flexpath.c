@@ -59,6 +59,8 @@
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 #define IS_BLOCKING_ON(fp) (fp->flexpath_flags & (NON_BLOCKING_ON_TREE | NON_BLOCKING_ON_RING | NON_BLOCKING_ON_RING_OF_RINGS))
 
+#define FLEXPATH_WEIR_MAX_MIN_LOG
+
 //This is a linked list for the linked list of fp_vars
 //This is necessary to support push based gloabl metadata updates
 
@@ -143,6 +145,15 @@ typedef struct _fp_var_list
     struct _fp_var_list * next;
 } timestep_separated_lists;
 
+//Contains the max, min, and standard deviation for when FLEXPATH_WEIR_MAX_MIN_LOG=1
+typedef struct _flexpath_weir_log_element
+{
+    int max;
+    int min;
+    double mean;
+    double standard_deviation;
+} flexpath_weir_log_element;
+
 typedef struct _flexpath_reader_file
 {
     char *file_name;
@@ -187,6 +198,12 @@ typedef struct _flexpath_reader_file
     int num_vars;
     uint64_t data_read; // for perf measurements.
     double time_in; // for perf measurements.
+
+    //Monitoring weir
+    flexpath_weir_log_element * weir_log;
+    int current_index;
+    int buffer_increment;
+
     pthread_mutex_t queue_mutex;
     pthread_mutex_t writer_queue_size_mutex;
     pthread_cond_t queue_condition;
@@ -310,6 +327,16 @@ static atom_t MESSAGE_COUNT = -1;
 
 flexpath_read_data* fp_read_data = NULL;
 
+
+static void
+check_if_log_overrun(flexpath_reader_file * fp)
+{
+    if(fp->current_index % fp->buffer_increment == 0)
+    {
+        fp->weir_log = realloc(fp->weir_log, sizeof(flexpath_weir_log_element) * (fp->current_index + fp->buffer_increment));
+    }
+}
+
 int
 callback_for_weir(CManager cm, void * vevent, void * client_data, attr_list attrs)
 {
@@ -318,6 +345,8 @@ callback_for_weir(CManager cm, void * vevent, void * client_data, attr_list attr
     lamport_clock_ptr event = (lamport_clock_ptr) vevent;
     get_int_attr(attrs, MESSAGE_COUNT, &out_message);
     int i;
+
+
     if(fp->verbose)
     {
 	fp_verbose(fp, "Clock value: ");
@@ -344,13 +373,46 @@ callback_for_weir(CManager cm, void * vevent, void * client_data, attr_list attr
     {
 	//fp_verbose(fp, "Setting new lowest to: %d\n", lowest);
 	fp->lowest_timestep_seen = lowest;
+
+#ifdef FLEXPATH_WEIR_MAX_MIN_LOG
+        check_if_log_overrun(fp);
+        fp->weir_log[fp->current_index].min = event->local_view[0];
+        fp->weir_log[fp->current_index].min = event->local_view[0];
+        fp->weir_log[fp->current_index].mean = event->local_view[0];
+        fp->weir_log[fp->current_index].standard_deviation = 0;
+        for(i = 1; i < event->number_of_clients; i++)
+        {
+            fp->weir_log[fp->current_index].mean += event->local_view[i];
+
+            if(event->local_view[i] < fp->weir_log[fp->current_index].min)
+                fp->weir_log[fp->current_index].min = event->local_view[i];
+
+            if(event->local_view[i] > fp->weir_log[fp->current_index].max)
+                fp->weir_log[fp->current_index].max = event->local_view[i];
+        }
+        fp->weir_log[fp->current_index].mean = fp->weir_log[fp->current_index].mean / event->number_of_clients;
+        
+        int temp;
+        for(i = 0; i < event->number_of_clients; i++)
+        {
+            temp = event->local_view[i] - fp->weir_log[fp->current_index].mean;
+            temp = temp * temp;
+            fp->weir_log[fp->current_index].standard_deviation += temp;
+        }
+        fp->weir_log[fp->current_index].standard_deviation = fp->weir_log[fp->current_index].standard_deviation / event->number_of_clients;
+        fp->weir_log[fp->current_index].standard_deviation = sqrt(fp->weir_log[fp->current_index].standard_deviation);
+        (fp->current_index)++;
+
+#endif
     }
+    /*
     else if(fp->lowest_timestep_seen > lowest)
     {
     	fp_verbose(fp, "Error: lowest timestep seen should be: %d but is: %d\n", fp->lowest_timestep_seen, lowest);
 	fprintf(stderr, "Error: lowest timestep seen has suddenly gone backward...impossible, severe error!\n");
 	exit(1);
     }
+    */
     
 
     pthread_cond_signal(&(fp->writer_queue_size_condition));
@@ -1044,6 +1106,12 @@ new_flexpath_reader_file(const char *fname)
     pthread_mutex_init(&fp->writer_queue_size_mutex, NULL);
     pthread_cond_init(&fp->queue_condition, NULL);
     pthread_cond_init(&fp->writer_queue_size_condition, NULL);
+#ifdef FLEXPATH_WEIR_MAX_MIN_LOG
+    fp->buffer_increment = 200;
+    //Think this line is unnecssary, so remove if successfully run
+    //fp->weir_log = calloc(fp->buffer_increment, sizeof(flexpath_weir_log_element));
+#endif
+
     return fp;
 }
 
@@ -2437,6 +2505,93 @@ int adios_read_flexpath_close(ADIOS_FILE * fp)
 	CMusleep(fp_read_data->cm, 10000);
     }
     */
+
+#ifdef FLEXPATH_WEIR_MAX_MIN_LOG
+//Collect everything on the root node and dump to disk
+
+        //Martial the data into four arrays, two of ints, the other of doubles
+        int * local_weir_max_info = calloc(file->current_index, sizeof(int));
+        int * local_weir_min_info = calloc(file->current_index, sizeof(int));
+        double * local_weir_mean_info = calloc(file->current_index, sizeof(double));
+        double * local_weir_std_dev_info = calloc(file->current_index, sizeof(double));
+        int i;
+        for(i = 0; i < file->current_index; i++)
+        {
+            local_weir_max_info[i] = file->weir_log[i].max;
+            local_weir_min_info[i] = file->weir_log[i].min;
+            local_weir_mean_info[i] = file->weir_log[i].mean;
+            local_weir_std_dev_info[i] = file->weir_log[i].standard_deviation;
+        }
+
+
+
+        if(file->rank == 0)
+        {
+            int * array_sizes = calloc(file->size, sizeof(int));
+            int * displacements = calloc(file->size, sizeof(int));
+            MPI_Gather(&(file->current_index), 1, MPI_INT, array_sizes, 1, MPI_INT, 0, file->comm);
+            int total_final_size = array_sizes[0];
+            displacements[0] = 0;
+
+            for(i = 1; i < file->size; i++)
+            {
+                displacements[i] = array_sizes[i - 1] + displacements[i - 1];
+                total_final_size += array_sizes[i];
+            }
+            printf("Total_final_size: %d\n", total_final_size);
+            int * weir_final_max = calloc(total_final_size, sizeof(int));
+            int * weir_final_min = calloc(total_final_size, sizeof(int));
+            double * weir_final_mean = calloc(total_final_size, sizeof(double));
+            double * weir_final_std_dev = calloc(total_final_size, sizeof(double));
+            MPI_Gatherv(local_weir_max_info, file->current_index, MPI_INT, weir_final_max, array_sizes, displacements, 
+                        MPI_INT, 0, file->comm);
+            MPI_Gatherv(local_weir_min_info, file->current_index, MPI_INT, weir_final_min, array_sizes, displacements, 
+                        MPI_INT, 0, file->comm);
+            MPI_Gatherv(local_weir_mean_info, file->current_index, MPI_DOUBLE, weir_final_mean, array_sizes, displacements, 
+                        MPI_DOUBLE, 0, file->comm);
+            MPI_Gatherv(local_weir_std_dev_info, file->current_index, MPI_DOUBLE, weir_final_std_dev, array_sizes, displacements, 
+                        MPI_DOUBLE, 0, file->comm);
+
+            char log_filename[500];
+            sprintf(log_filename, "flexpath_weir_log_%d_queueSize_%d_numReaders_%d_numWriters.out", file->writer_queue_size,
+                                                                                                    file->size, file->num_bridges);
+            FILE *weir_log_file = fopen(log_filename, "w");
+            int j;
+            for(i = 0; i < file->size; i++)
+            {
+                fprintf(weir_log_file, "Rank %d\n", i);
+                int begin = displacements[i];
+                for(j = 0; j < array_sizes[i]; j++)
+                {
+                    fprintf(weir_log_file, "%d: %d, %d, %f, %f\n", j, weir_final_max[begin + j],
+                                                                      weir_final_min[begin + j],
+                                                                      weir_final_mean[begin + j],
+                                                                      weir_final_std_dev[begin + j]);
+                }
+            }
+            fclose(weir_log_file);
+            free(weir_final_max);
+            free(weir_final_min);
+            free(weir_final_mean);
+            free(weir_final_std_dev);
+            free(displacements);
+            free(array_sizes);
+        }
+        else
+        {
+
+            MPI_Gather(&(file->current_index), 1, MPI_INT, NULL, 1, MPI_INT, 0, file->comm);
+            MPI_Gatherv(local_weir_max_info, file->current_index, MPI_INT, NULL, NULL, NULL, MPI_INT, 0, file->comm);
+            MPI_Gatherv(local_weir_min_info, file->current_index, MPI_INT, NULL, NULL, NULL, MPI_INT, 0, file->comm);
+            MPI_Gatherv(local_weir_mean_info, file->current_index, MPI_DOUBLE, NULL, NULL, NULL, MPI_DOUBLE, 0, file->comm);
+            MPI_Gatherv(local_weir_std_dev_info, file->current_index, MPI_DOUBLE, NULL, NULL, NULL, MPI_DOUBLE, 0, file->comm);
+        }
+        MPI_Barrier(file->comm);
+        free(local_weir_max_info);
+        free(local_weir_min_info);
+        free(local_weir_mean_info);
+        free(local_weir_std_dev_info);
+#endif
     
 
     flexpath_free_filedata(file);
