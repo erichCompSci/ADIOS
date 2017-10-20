@@ -275,6 +275,7 @@ static char * cod_code_weir= "{\n\
 		    set_int_attr(the_event_attrs, \"last_node_id\", my_node_id);\n\
                     if(port == 0)\n\
                     {\n\
+                        fp_verbose(\"Submitting message count \%d\\n\", message_count);\n\
                         set_int_attr(the_event_attrs, \"message_count\", message_count);\n\
                         message_count = message_count + 1;\n\
                     }\n\
@@ -289,11 +290,13 @@ static char * cod_code_weir= "{\n\
 		set_int_attr(the_event_attrs, \"last_node_id\", my_node_id);\n\
                 if(port == 0)\n\
                 {\n\
+                    fp_verbose(\"Submitting message count \%d\\n\", message_count);\n\
                     set_int_attr(the_event_attrs, \"message_count\", message_count);\n\
                     message_count = message_count + 1;\n\
                 }\n\
                 attr_list extra_attrs = copy_attr_list(the_event_attrs);\n\
                 EVsubmit_attr(port, to_send, the_event_attrs);\n\
+                fp_verbose(\"Submitting message count \%d\\n\", message_count);\n\
                 set_int_attr(extra_attrs, \"message_count\", message_count);\n\
                 message_count = message_count + 1;\n\
                 EVsubmit_attr(0, to_send, extra_attrs);\n\
@@ -351,7 +354,7 @@ callback_for_weir(CManager cm, void * vevent, void * client_data, attr_list attr
     {
     	fp_verbose(fp, "Error: lowest timestep seen should be: %d but is: %d\n", fp->lowest_timestep_seen, lowest);
 	fprintf(stderr, "Error: lowest timestep seen has suddenly gone backward...impossible, severe error!\n");
-	exit(1);
+	//exit(1);
     }
     
 
