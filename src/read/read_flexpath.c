@@ -192,6 +192,7 @@ typedef struct _flexpath_reader_file
     weir_master master_weir;
     weir_client	client_weir;
     int lowest_timestep_seen;
+    int max_timestep_seen;
     int writer_queue_size;
     int debug_msg;
 
@@ -303,15 +304,13 @@ static char * cod_code_weir= "{\n\
             {\n\
 		int port = weir_get_port(the_event_attrs);\n\
 		set_int_attr(the_event_attrs, \"last_node_id\", my_node_id);\n\
-                if(port == 0)\n\
+                if(port != 0 || my_node_id == 1)\n\
                 {\n\
+                    EVsubmit_attr(port, to_send, the_event_attrs);\n\
                     set_int_attr(the_event_attrs, \"message_count\", message_count);\n\
                     message_count = message_count + 1;\n\
+                    EVsubmit_attr(0, to_send, the_event_attrs);\n\
                 }\n\
-                EVsubmit_attr(port, to_send, the_event_attrs);\n\
-                set_int_attr(the_event_attrs, \"message_count\", message_count);\n\
-                message_count = message_count + 1;\n\
-                EVsubmit_attr(0, to_send, the_event_attrs);\n\
                 EVdiscard_lamport_clock(0);\n\
             }\n\
         }\0\0";
@@ -349,7 +348,7 @@ callback_for_weir(CManager cm, void * vevent, void * client_data, attr_list attr
 
     if(fp->verbose)
     {
-	fp_verbose(fp, "Clock value: ");
+	fp_verbose(fp, "Client: %d -> Clock value: ", weir_get_client_id_in_group(fp->client_weir));
 	
 	for(i = 0; i < event->number_of_clients; i++)
 	{
@@ -360,24 +359,29 @@ callback_for_weir(CManager cm, void * vevent, void * client_data, attr_list attr
     //fp_verbose(fp, "Setting new lowest to: %d\n", lowest);
 
     int lowest = event->local_view[0];
+    int max    = event->local_view[0];
     for(i = 1; i < event->number_of_clients; i++)
     {
 	if(event->local_view[i] < lowest)
 	    lowest = event->local_view[i];
+
+        if(event->local_view[i] > max)
+            max = event->local_view[i];
     }
     //fp_verbose(fp, "Lowest timestep in event is: %d\n", lowest);
     fp_verbose(fp, "Latest out message is: %d\n", out_message);
 
     pthread_mutex_lock(&(fp->writer_queue_size_mutex));
-    if(fp->lowest_timestep_seen < lowest)
+    if(fp->lowest_timestep_seen < lowest || fp->max_timestep_seen < max)
     {
 	//fp_verbose(fp, "Setting new lowest to: %d\n", lowest);
 	fp->lowest_timestep_seen = lowest;
+        fp->max_timestep_seen = max;
 
 #ifdef FLEXPATH_WEIR_MAX_MIN_LOG
         check_if_log_overrun(fp);
         fp->weir_log[fp->current_index].min = event->local_view[0];
-        fp->weir_log[fp->current_index].min = event->local_view[0];
+        fp->weir_log[fp->current_index].max = event->local_view[0];
         fp->weir_log[fp->current_index].mean = event->local_view[0];
         fp->weir_log[fp->current_index].standard_deviation = 0;
         for(i = 1; i < event->number_of_clients; i++)
@@ -481,6 +485,7 @@ avoid_deadlock_get_min_timestep(flexpath_reader_file * fp, int requested)
 
     	    updated_tree_request++;
 	    //This is messed up because the weir has to control the ordering of the locking...need to discuss this with someone probably
+    	    fp_verbose(fp, "Client: %d -> Updateing weir in avoid deadlock get min timestep!\n", weir_get_client_id_in_group(fp->client_weir));
 	    update_weir(fp, 1);
 	    pthread_mutex_lock(&(fp->writer_queue_size_mutex));
 
@@ -489,7 +494,10 @@ avoid_deadlock_get_min_timestep(flexpath_reader_file * fp, int requested)
     	    //fp_verbose(fp, "Writer_queue_size: %d\tRequested: %d\tLowest_timestep_seen: %d\n", 
 			//fp->writer_queue_size, requested, fp->lowest_timestep_seen);
     	    //fp_verbose(fp, "Requested Update on the tree %d times\n", updated_tree_request);
-    	    fp_verbose(fp, "Waiting for an update to my clock\n");
+            //if(weir_get_client_id_in_group(fp->client_weir) == 1)
+            //{
+            //    updated_tree_request++;
+    	    fp_verbose(fp, "Client: %d -> Waiting for an update to my clock\n", weir_get_client_id_in_group(fp->client_weir));
     	    pthread_cond_wait(&(fp->writer_queue_size_condition), &(fp->writer_queue_size_mutex));
     	    fp_verbose(fp, "Received signal! Requested is: %d and lowest is: %d\n", requested, fp->lowest_timestep_seen);
 	    
@@ -775,6 +783,7 @@ void flexpath_wait_for_global_metadata(flexpath_reader_file *fp, int timestep)
 	//We need to shake loose updates if the root is waiting
 	if(IS_BLOCKING_ON(fp))
     	{
+    	    fp_verbose(fp, "Updateing weir in wait for global metadata!\n");
     	    update_weir(fp, 1);
     	}
         pthread_cond_wait(&(fp->queue_condition), &(fp->queue_mutex));
@@ -1469,10 +1478,11 @@ send_read_msg(flexpath_reader_file *fp, int index, int use_condition)
 
 
     msg->current_lamport_min = avoid_deadlock_get_min_timestep(fp, msg->timestep_requested);
-    if(IS_BLOCKING_ON(fp))
+    /*if(IS_BLOCKING_ON(fp))
     {
 	update_weir(fp, 1);
     }
+    */
     //Basic error checking so we don't break on simple things in the future
 
     if(!fp->bridges[destination].opened) 
@@ -2013,6 +2023,7 @@ adios_read_flexpath_init_method (MPI_Comm comm, PairStruct* params)
     CM_TRANSPORT = attr_atom_from_string("CM_TRANSPORT");
     FORCE_UPDATE = attr_atom_from_string("force_update");
     MESSAGE_COUNT = attr_atom_from_string("message_count");
+    atom_t CM_ENET_CONN_TIMEOUT = attr_atom_from_string("CM_ENET_CONN_TIMEOUT");
 
     fp_read_data = malloc(sizeof(flexpath_read_data));
     if (!fp_read_data) {
@@ -2021,7 +2032,7 @@ adios_read_flexpath_init_method (MPI_Comm comm, PairStruct* params)
     }
     memset(fp_read_data, 0, sizeof(flexpath_read_data));
 
-    attr_list listen_list = NULL;
+    attr_list listen_list, contact_list = NULL;
     char * transport = NULL;
     transport = getenv("CMTransport");
 
@@ -2035,7 +2046,11 @@ adios_read_flexpath_init_method (MPI_Comm comm, PairStruct* params)
     if (transport == NULL) {
       int listened = 0;
       while (listened == 0) {
-	  if (CMlisten(fp_read_data->cm) == 0) {
+            listen_list = create_attr_list();
+            add_string_attr(listen_list, CM_TRANSPORT, strdup("enet"));
+            /* Wait 60 seconds for timeout */
+            add_int_attr(listen_list, CM_ENET_CONN_TIMEOUT, 3600000);
+	  if (CMlisten_specific(fp_read_data->cm, listen_list) == 0) {
 	      fprintf(stderr, "Flexpath ERROR: reader %d:pid:%d unable to initialize connection manager. Trying again.\n",
 		      fp_read_data->rank, (int)getpid());
 	  } else {
@@ -2429,6 +2444,12 @@ adios_read_flexpath_advance_step(ADIOS_FILE *adiosfile, int last, float timeout_
 	MPI_Barrier(fp->comm);
 	fp->lowest_timestep_seen = fp->mystep;
     }
+    else
+    {
+    	fp_verbose(fp, "Updateing weir in adios_read_flexpath_advance_step!\n");
+        update_weir(fp, 1);
+    }
+        
     int count = 0;
     
 
@@ -2479,6 +2500,7 @@ int adios_read_flexpath_close(ADIOS_FILE * fp)
 	    pthread_mutex_lock(&(file->writer_queue_size_mutex));
 	}
 	pthread_mutex_unlock(&(file->writer_queue_size_mutex));
+    	fp_verbose(file, "Updateing weir in adios_read_flexpath_close!\n");
 	update_weir(file, 1);
 
 	weir_send_shutdown_and_wait(file->client_weir);
